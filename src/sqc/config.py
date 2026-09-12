@@ -35,9 +35,11 @@ class Settings(BaseSettings):
     evidence_top_k: int = Field(default=6, ge=1, le=50)
     rrf_k: int = Field(default=60, ge=1)
 
-    # refusal / confidence thresholds. Defaults are starting points to be
-    # tuned against evals, never treated as tuned values.
-    retrieval_floor: float = Field(default=0.30, ge=0.0, le=1.0)
+    # Refusal thresholds. 0.0 disables the retrieval floor, which is the
+    # deliberate default: rerank scores are not comparable across providers,
+    # so a threshold tuned for one model silently refuses answerable
+    # questions under another. Calibrate against the eval set, then set it.
+    retrieval_floor: float = Field(default=0.0, ge=0.0, le=1.0)
     confidence_high: float = Field(default=0.75, ge=0.0, le=1.0)
     confidence_medium: float = Field(default=0.50, ge=0.0, le=1.0)
 

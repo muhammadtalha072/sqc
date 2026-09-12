@@ -27,6 +27,11 @@ class NoOpReranker:
     """
 
     model = "none"
+    is_noop = True
+    """Explicit marker. Callers must not read these scores as relevance,
+    and inferring that from an all-zero result would also discard a real
+    reranker's legitimate verdict that nothing here is relevant."""
+
 
     def rerank(self, query: str, documents: list[str], top_k: int):  # noqa: ANN201
         from sqc.providers.base import RerankedItem

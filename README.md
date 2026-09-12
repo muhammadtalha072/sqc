@@ -9,7 +9,26 @@ Core principle: **never guess.** Unsupported questions are refused, not answered
 - Step 3 complete: embedding / rerank / LLM provider protocols, Voyage + Anthropic
   clients, and deterministic fakes so the full suite runs offline with no API keys.
 - Step 4 complete: ingestion pipeline into Postgres, plus CLI tools.
-- Next: step 5, hybrid retrieval (full-text + vector + RRF fusion + rerank).
+- Step 5 complete: hybrid retrieval (full-text + vector + RRF + rerank + evidence packing).
+- Step 6 complete: evidence-grounded answering, deterministic validator, refusal states.
+- Next: step 7, evaluation harness and golden dataset (then threshold calibration).
+
+## Answering
+```bash
+python scripts/answer.py --tenant $TENANT "Is MFA required for all accounts?"
+python scripts/answer.py --tenant $TENANT --audit "Is data encrypted at rest?"
+```
+Status is decided by the validator, never by the model: the schema has no
+confidence field, and the model cites short handles (E1, E2) that the
+validator maps back to real chunk ids, so it cannot invent a citation.
+
+## Searching
+```bash
+python scripts/search.py --tenant $TENANT "Do you enforce MFA?"
+python scripts/search.py --tenant $TENANT "Where is customer data stored?" --explain
+```
+`--explain` shows per-retriever scores and ranks, which is how to tell a
+lexical hit from a dense one when tuning.
 
 ## Ingesting documents
 ```bash
