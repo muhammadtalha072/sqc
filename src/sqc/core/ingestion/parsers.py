@@ -192,6 +192,41 @@ def _render_table(rows: list[list[str]]) -> str:
 # ---------------------------------------------------------------------- pdf
 
 
+def _normalise_repeating(text: str) -> str:
+    """Collapse digits so 'Page 3 of 7' and 'Page 4 of 7' compare equal."""
+    return re.sub(r"\d+", "#", text.strip().lower())
+
+
+MARGIN_FRACTION = 0.12
+"""Fraction of page height at the top and bottom treated as margin. Running
+headers and footers live there; body text does not."""
+
+
+def _find_running_lines(pages: list[list[dict]], page_count: int) -> set[str]:
+    """Text repeated in the margin across most pages: headers and footers.
+
+    Left in place they do real damage. A running header set in a larger face
+    than the body is detected as a heading on every page, so each page opens
+    a new parent section and the document's actual structure is replaced by
+    its pagination. Footers additionally pollute chunk text with 'Page 4 of 7'.
+
+    Only applied from three pages up, since on a two-page document a genuine
+    heading could legitimately appear on both.
+    """
+    if page_count < 3:
+        return set()
+    seen: dict[str, set[int]] = {}
+    for lines in pages:
+        for line in lines:
+            if not line.get("in_margin"):
+                continue
+            key = _normalise_repeating(line["text"])
+            if key:
+                seen.setdefault(key, set()).add(line["page"])
+    threshold = max(3, round(page_count * 0.5))
+    return {key for key, page_numbers in seen.items() if len(page_numbers) >= threshold}
+
+
 def parse_pdf(raw: bytes, filename: str) -> ParsedDocument:
     """PDF via pdfplumber, keeping real page numbers for citations.
 
@@ -215,7 +250,18 @@ def parse_pdf(raw: bytes, filename: str) -> ParsedDocument:
                     f"{', '.join(map(str, empty[:10]))}"
                     + (" (image-only pages need OCR)" if len(empty) == page_count else "")
                 )
-            all_lines = [line for page_lines in pages for line in page_lines]
+
+            running = _find_running_lines(pages, page_count)
+            if running:
+                warnings.append(
+                    f"dropped {len(running)} running header/footer line(s) repeated across pages"
+                )
+            all_lines = [
+                line
+                for page_lines in pages
+                for line in page_lines
+                if _normalise_repeating(line["text"]) not in running
+            ]
             if not all_lines:
                 return _finalise(filename, "pdf", [], raw, page_count, warnings)
 
@@ -247,6 +293,8 @@ def _extract_page_lines(page, page_number: int) -> list[dict]:  # noqa: ANN001
         table_boxes = []
 
     lines: list[dict] = []
+    page_height = float(page.height or 0.0) or 1.0
+    margin = page_height * MARGIN_FRACTION
     for line in page.extract_text_lines(return_chars=True, strip=True) or []:
         text = _clean(line.get("text", ""))
         if not text:
@@ -267,6 +315,7 @@ def _extract_page_lines(page, page_number: int) -> list[dict]:  # noqa: ANN001
                 "top": top,
                 "bottom": bottom,
                 "chars": len(text),
+                "in_margin": top < margin or bottom > page_height - margin,
             }
         )
     return lines
@@ -343,12 +392,36 @@ def _dehyphenate(buffer: list[str], text: str) -> str:
     return text
 
 
+SHORT_HEADING_WORDS = 3
+"""A numbered line this short is taken as a heading even without typographic
+emphasis, covering policies that set '4.2 Exceptions' in the body face.
+
+Kept deliberately tight. At four words and no emphasis, '1. Use MFA
+everywhere' and '3. Incident Response Plan' are genuinely
+indistinguishable, so the tie is broken toward not-a-heading: a missed
+heading costs some retrieval precision, while a false one misfiles every
+chunk that follows it and produces citations naming the wrong section."""
+
+
 def _heading_level(line: dict, body_size: float, size_levels: dict[float, int]) -> int | None:
-    """Numbering wins over typography; bold short lines are the last resort."""
+    """Numbering gives the depth; typography decides whether it is a heading.
+
+    Numbering alone is not enough, and assuming it was caused the worst bug
+    found so far. Policies enumerate obligations as '2. Designing,
+    implementing and monitoring safeguards to help minimize the risks
+    associated with', set in the body face and wrapped at the margin. Shape
+    rules reject most of those, but a short list item ending in a full stop
+    slips through every text-only test. In a PDF the discriminator is right
+    there: a real heading is bold, or larger than the body, or very short.
+    """
     numbered = numbering_level(line["text"])
     size_level = size_levels.get(line["size"])
+    distinguished = line["bold"] or line["size"] > body_size * 1.08
+
     if numbered is not None:
-        return numbered
+        if distinguished or len(line["text"].split()) <= SHORT_HEADING_WORDS:
+            return numbered
+        return None
     if size_level is not None and line["size"] > body_size * 1.08:
         return size_level
     if line["bold"] and looks_like_heading(line["text"]):

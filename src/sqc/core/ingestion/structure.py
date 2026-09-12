@@ -21,14 +21,48 @@ _SENTENCE_END = re.compile(r"[.;:,!?]\s*$")
 
 MAX_HEADING_WORDS = 14
 MAX_HEADING_CHARS = 120
+MAX_NUMBERED_HEADING_WORDS = 12
+"""Tighter than MAX_HEADING_WORDS. Numbered lines need a stricter test
+because policies enumerate obligations as '3. Ensure oversight of Service
+Providers...', which is prose wearing a section number."""
+
+# A sentence boundary inside the line. Headings do not contain one; prose
+# broken at a PDF line break frequently does.
+_INTERNAL_SENTENCE = re.compile(r"[.!?]\s+\S")
+# A heading may end in a colon; it does not end in a full stop.
+_TERMINAL_STOP = re.compile(r"[.!?][\"'\u201d)]?\s*$")
+
+_DANGLING_WORDS = frozenset(
+    """a an and as at be been by for from in into is are of on or that the their this
+    to under upon which with within without shall must may can when where while
+    including any all such other than""".split()
+)
+"""Words a heading never ends on. A line finishing 'associated with' is a
+sentence cut at the page margin, however heading-shaped the rest looks."""
+
+
+def _ends_mid_sentence(title: str) -> bool:
+    words = title.rstrip(":").split()
+    return bool(words) and words[-1].strip(",;").lower() in _DANGLING_WORDS
 
 
 def numbering_level(text: str) -> int | None:
     """Depth implied by a section number, e.g. '4.2.1 Access Control' -> 3.
 
-    Returns None when the line carries no usable numbering. This signal is
-    trusted above font size because security policies number their sections
-    consistently while their typography is often a mess.
+    Returns None when the line carries no usable numbering, or when the
+    numbering belongs to a list item rather than a heading.
+
+    That second case is not hypothetical. A real policy produced chunks whose
+    heading path read '2. Report all breaches to (or losses/improper uses of)
+    DePaul data, systems or devices. Such' - a body line cut at a page-width
+    break. Because a bare '2.' reads as depth 1, it also reset the heading
+    stack, so the following chunks were filed under a list item instead of
+    the section they belonged to. A citation naming the wrong section is
+    worse than no citation.
+
+    The rejections below are ordered by how reliably they fire: too many
+    words, a sentence boundary inside the line, a closing full stop, and a
+    dangling function word at the end.
     """
     stripped = text.strip()
     match = _NUMBERED.match(stripped)
@@ -37,7 +71,14 @@ def numbering_level(text: str) -> int | None:
         # "2024. Something" is a year, not a section number.
         if re.fullmatch(r"(19|20)\d{2}", number):
             return None
-        if not title.strip() or len(title) > MAX_HEADING_CHARS:
+        title = title.strip()
+        if not title or len(title) > MAX_HEADING_CHARS:
+            return None
+        if len(title.split()) > MAX_NUMBERED_HEADING_WORDS:
+            return None
+        if _INTERNAL_SENTENCE.search(title) or _TERMINAL_STOP.search(title):
+            return None
+        if _ends_mid_sentence(title):
             return None
         return min(len(number.split(".")), 6)
     if _LABELLED.match(stripped) and len(stripped) <= MAX_HEADING_CHARS:

@@ -18,13 +18,25 @@ H1_SIZE = 18.0
 H2_SIZE = 14.0
 
 
-def build_pdf(pages: list[list[tuple[str, float, bool]]]) -> bytes:
-    """Render pages of (text, font_size, bold) lines to PDF bytes."""
+def build_pdf(
+    pages: list[list[tuple[str, float, bool]]],
+    header: str | None = None,
+    footer_template: str | None = None,
+) -> bytes:
+    """Render pages of (text, font_size, bold) lines to PDF bytes.
+
+    header/footer_template are drawn at real page margins rather than as
+    ordinary lines, because header detection keys on vertical position.
+    footer_template may contain {page} and {total}.
+    """
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    for page in pages:
-        y = height - 60
+    for number, page in enumerate(pages, start=1):
+        if header:
+            pdf.setFont("Helvetica", BODY_SIZE - 2)
+            pdf.drawString(60, height - 30, header)
+        y = height - 90
         for text, size, bold in page:
             pdf.setFont("Helvetica-Bold" if bold else "Helvetica", size)
             # Wrap long lines so the renderer does not silently clip them.
@@ -40,6 +52,9 @@ def build_pdf(pages: list[list[tuple[str, float, bool]]]) -> bytes:
             if line:
                 pdf.drawString(60, y, line)
             y -= size * 2.0
+        if footer_template:
+            pdf.setFont("Helvetica", BODY_SIZE - 2)
+            pdf.drawString(60, 30, footer_template.format(page=number, total=len(pages)))
         pdf.showPage()
     pdf.save()
     return buffer.getvalue()
@@ -111,4 +126,45 @@ def security_policy_docx() -> bytes:
             [["Control", "Status"], ["Encryption at rest", "Implemented"],
              ["Penetration testing", "Annual"]],
         ],
+    )
+
+
+def lettered_policy_pdf() -> bytes:
+    """Reproduces the layout that broke on a real university policy.
+
+    Three features the generated fixtures lacked: a running header and footer
+    on every page, lettered section headings rather than numbered ones, and
+    obligations enumerated as '1.', '2.', '3.' in body prose that wrap at the
+    line break. The last was read as a section heading, which reset the
+    heading stack and filed the text that followed under the wrong section.
+    """
+    body, heading = BODY_SIZE, H2_SIZE
+    return build_pdf(
+        [
+            [
+                ("Information Security Policy", H1_SIZE, True),
+                ("Effective Date: 31 March 2017", body, False),
+                ("A. DEFINITIONS", heading, True),
+                ("Covered Data means information that identifies an individual and is "
+                 "protected under this policy.", body, False),
+            ],
+            [
+                ("B. COMMUNITY MEMBER RESPONSIBILITIES", heading, True),
+                ("1. Protect all University credentials issued to you. Credentials must not "
+                 "be shared with any other person under any circumstances.", body, False),
+                ("2. Report all breaches to (or losses/improper uses of) University data, "
+                 "systems or devices. Such events must be reported immediately to the "
+                 "Director of Information Security.", body, False),
+            ],
+            [
+                ("C. RESPONSIBLE OFFICER RESPONSIBILITIES", heading, True),
+                ("1. Assessing the risks associated with University data, systems or devices. "
+                 "Risk assessment models applicable to information security will be developed "
+                 "and implemented in the applicable departments.", body, False),
+                ("Community members who fail to comply with this policy are subject to "
+                 "disciplinary action.", body, False),
+            ],
+        ],
+        header="DePaul University Information Security Policy",
+        footer_template="Page {page} of {total}",
     )

@@ -23,6 +23,7 @@ from sqc.core.ingestion.structure import (
 from tests.fixtures import (
     BODY_SIZE,
     H1_SIZE,
+    H2_SIZE,
     build_docx,
     build_pdf,
     security_policy_docx,
@@ -279,3 +280,127 @@ def test_block_rejects_impossible_page_range():
 
     with pytest.raises(ValueError, match="precedes"):
         Block(text="x", page=5, page_end=2)
+
+
+# ------------------------------------------------- real-world layout regression
+
+
+def test_numbered_list_items_in_prose_are_not_headings():
+    """Regression from a real university policy. Obligations enumerated as
+    '2. Report all breaches ... devices. Such' were promoted to headings,
+    and because a bare '2.' reads as depth 1 they reset the heading stack,
+    filing the text that followed under the wrong section."""
+    from tests.fixtures import lettered_policy_pdf
+
+    doc = parse_pdf(lettered_policy_pdf(), "lettered.pdf")
+    headings = [b.text for b in doc.blocks if b.kind == "heading"]
+
+    assert not [h for h in headings if h.startswith(("1.", "2.", "3."))], (
+        f"list items promoted to headings: {headings}"
+    )
+    assert "A. DEFINITIONS" in headings
+    assert "B. COMMUNITY MEMBER RESPONSIBILITIES" in headings
+    assert "C. RESPONSIBLE OFFICER RESPONSIBILITIES" in headings
+
+
+def test_running_header_and_footer_are_dropped():
+    """Left in place, a running header is detected as a heading on every page,
+    so each page opens a new section and the document's real structure is
+    replaced by its pagination."""
+    from tests.fixtures import lettered_policy_pdf
+
+    doc = parse_pdf(lettered_policy_pdf(), "lettered.pdf")
+    all_text = " ".join(b.text for b in doc.blocks)
+
+    assert "Page 2 of 3" not in all_text, "footer leaked into chunk text"
+    assert all_text.count("DePaul University Information Security Policy") <= 1
+    assert any("running header" in w for w in doc.warnings)
+
+
+def test_two_page_document_keeps_a_heading_repeated_on_both_pages():
+    """Header detection must not fire on short documents, where a genuine
+    heading can legitimately appear on both pages."""
+    raw = build_pdf([
+        [("Access Control", H1_SIZE, True), ("MFA is required for all staff.", BODY_SIZE, False)],
+        [("Access Control", H1_SIZE, True), ("Reviews happen quarterly.", BODY_SIZE, False)],
+    ])
+    doc = parse_pdf(raw, "short.pdf")
+    assert [b.text for b in doc.blocks if b.kind == "heading"].count("Access Control") == 2
+
+
+# Lines taken verbatim from a real university policy, as pdfplumber breaks
+# them. Each one was classified as a section heading at some point during
+# development, and each reset the heading stack, filing the text that
+# followed under a section it had nothing to do with.
+REAL_PROSE_LINES = [
+    "2. Report all breaches to (or losses/improper uses of) DePaul data, systems or devices. Such",
+    "3. Ensure oversight of Service Providers Having Covered Data Access. Any Service Provider",
+    "1. Assessing the risks associated with DePaul data, systems or devices. Risk assessment models and",
+    "3. Determining whether there has been a 'Breach Requiring Notice' and, if so, notifying the",
+    "1. Comply with all University IS Policies.",
+    "2. Designing, implementing and monitoring safeguards to help minimize the risks associated with",
+]
+
+
+@pytest.mark.parametrize("line", REAL_PROSE_LINES, ids=lambda s: s[:34])
+def test_real_prose_lines_are_never_headings(line):
+    assert numbering_level(line) is None
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["4.2 Exceptions", "4. Access Control", "1. Data Retention", "2.1 Deletion Requests",
+     "4.2.1 Password Rules", "3. Incident Response Plan", "Section 12 Incident Response"],
+)
+def test_genuine_numbered_headings_survive_the_stricter_rules(line):
+    assert numbering_level(line) is not None
+
+
+def test_numbered_body_line_needs_typographic_emphasis_to_be_a_heading():
+    """Shape rules reject most prose list items, but in a PDF the reliable
+    discriminator is typography: real headings are bold or larger, list items
+    are set in the body face."""
+    raw = build_pdf([
+        [
+            ("4. Access Control", H2_SIZE, True),
+            ("1. Use multi-factor authentication on every production account",
+             BODY_SIZE, False),
+            ("2. Rotate encryption keys at least once every twelve months",
+             BODY_SIZE, False),
+            ("Access to production systems is reviewed each quarter by the security team.",
+             BODY_SIZE, False),
+        ]
+    ])
+    headings = [b.text for b in parse_pdf(raw, "emph.pdf").blocks if b.kind == "heading"]
+    assert headings == ["4. Access Control"], f"unexpected headings: {headings}"
+
+
+def test_ambiguous_short_numbered_line_is_treated_as_body_text():
+    """Documents the limit of what parsing can know. With no emphasis and
+    four words, a list item and a heading look identical, so the tie breaks
+    toward body text: a missed heading costs precision, a false one misfiles
+    every chunk after it."""
+    raw = build_pdf([
+        [
+            ("Security Standards", H2_SIZE, True),
+            ("1. Use MFA everywhere", BODY_SIZE, False),
+            ("This applies to all staff and contractors without exception.", BODY_SIZE, False),
+        ]
+    ])
+    headings = [b.text for b in parse_pdf(raw, "amb.pdf").blocks if b.kind == "heading"]
+    assert "1. Use MFA everywhere" not in headings
+
+
+def test_short_numbered_heading_works_without_emphasis():
+    """Some policies set section headings in the body face. A very short
+    numbered line is still taken as a heading."""
+    raw = build_pdf([
+        [
+            ("4.2 Exceptions", BODY_SIZE, False),
+            ("Break-glass accounts are exempt and use hardware tokens held in a safe.",
+             BODY_SIZE, False),
+        ]
+    ])
+    assert "4.2 Exceptions" in [
+        b.text for b in parse_pdf(raw, "plain.pdf").blocks if b.kind == "heading"
+    ]
