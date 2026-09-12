@@ -8,7 +8,18 @@ Core principle: **never guess.** Unsupported questions are refused, not answered
 - Step 2 complete: PDF / DOCX / TXT parsing and section-aware small-to-big chunking.
 - Step 3 complete: embedding / rerank / LLM provider protocols, Voyage + Anthropic
   clients, and deterministic fakes so the full suite runs offline with no API keys.
-- Next: step 4, ingestion into Postgres (first step needing a real embedding key).
+- Step 4 complete: ingestion pipeline into Postgres, plus CLI tools.
+- Next: step 5, hybrid retrieval (full-text + vector + RRF fusion + rerank).
+
+## Ingesting documents
+```bash
+TENANT=$(python scripts/create_tenant.py "Acme Corp")
+python scripts/ingest.py --tenant $TENANT --doc-type policy tests/data/policy.pdf
+python scripts/ingest.py --tenant $TENANT --list
+python scripts/ingest.py --tenant $TENANT --show <document-id>
+```
+Runs offline with `SQC_EMBEDDING_PROVIDER=fake`. Set it to `voyage` with a
+real key when measuring retrieval quality.
 
 ## Providers
 Set in `.env`. Defaults are `fake`, so `pytest` never needs a key or a network.
@@ -18,11 +29,11 @@ For real runs set `SQC_EMBEDDING_PROVIDER=voyage`, `SQC_RERANK_PROVIDER=voyage`,
 changing it requires re-running `scripts/init_db.py` and re-embedding.
 
 ### Known gap
-Every parser test runs against generated PDFs and DOCX files. Heading detection
-has not yet been proven on a real vendor security policy, where headers, footers,
-watermarks, two-column layouts and scanned pages appear. Drop a real policy PDF in
-`tests/data/` and the ingestion smoke test should be extended to cover it before
-step 4 loads anything into the database.
+Parser tests run against generated PDFs and DOCX files, which have no headers,
+footers, watermarks, two-column layouts or scanned pages. Drop any real security
+policy PDF into `tests/data/` and `test_real_policy_pdf_ingests_with_usable_structure`
+activates automatically, asserting that heading detection, page numbers and chunk
+sizes survive a real layout.
 
 ## Local setup
 ```bash

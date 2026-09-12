@@ -31,8 +31,38 @@ MAX_LEAF_TOKENS = 450
 MIN_LEAF_TOKENS = 40
 MAX_PARENT_TOKENS = 1200
 OVERLAP_SENTENCES = 1
+MAX_OVERLAP_TOKENS = 80
 
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[])")
+HARD_MAX_LEAF_TOKENS = MAX_LEAF_TOKENS + MAX_OVERLAP_TOKENS
+"""Ceiling no leaf may exceed, guaranteed by construction.
+
+Without a hard ceiling, chunk size is at the mercy of the source text. A
+control matrix serialised as pipe-delimited rows contains no sentence
+punctuation at all, so sentence splitting returns it as one unit and it
+would be stored, and embedded, whole. Real policies are full of such tables.
+"""
+
+# Splits on sentence punctuation followed by a new sentence, and on line
+# breaks. The line-break rule is what handles tables and enumerated lists,
+# where each row is a unit but no row ends in a full stop.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[])|\n+")
+
+
+def _hard_split(text: str, max_tokens: int) -> list[str]:
+    """Last-resort split on word boundaries.
+
+    Only reached when a single unit survives sentence splitting and is still
+    too large: a table with no punctuation, a semicolon-joined enumeration,
+    or OCR output with no sentence structure. Cutting mid-sentence is ugly,
+    and it is still better than an unbounded chunk, because the parent
+    section travels with every leaf and restores the context.
+    """
+    words = text.split()
+    if not words:
+        return []
+    # Inverts the same words-to-tokens ratio estimate_tokens uses.
+    per_piece = max(1, int(max_tokens / 1.3))
+    return [" ".join(words[i : i + per_piece]) for i in range(0, len(words), per_piece)]
 
 
 def parent_boundary_level(blocks: tuple[Block, ...]) -> int:
@@ -129,12 +159,21 @@ def _pack_leaves(section: _Section) -> list[list[tuple[Block, tuple[str, ...]]]]
             continue
         buffer: list[str] = []
         for sentence in split_sentences(block.text):
-            candidate = " ".join(buffer + [sentence])
-            if buffer and estimate_tokens(candidate) > TARGET_LEAF_TOKENS:
-                units.append((_replace_text(block, " ".join(buffer)), path))
-                buffer = [sentence]
-            else:
-                buffer.append(sentence)
+            # A "sentence" can still be enormous when the source has no
+            # sentence structure, so oversized ones are cut on word
+            # boundaries before packing.
+            pieces = (
+                _hard_split(sentence, TARGET_LEAF_TOKENS)
+                if estimate_tokens(sentence) > MAX_LEAF_TOKENS
+                else [sentence]
+            )
+            for piece in pieces:
+                candidate = " ".join(buffer + [piece])
+                if buffer and estimate_tokens(candidate) > TARGET_LEAF_TOKENS:
+                    units.append((_replace_text(block, " ".join(buffer)), path))
+                    buffer = [piece]
+                else:
+                    buffer.append(piece)
         if buffer:
             units.append((_replace_text(block, " ".join(buffer)), path))
 
@@ -154,9 +193,17 @@ def _pack_leaves(section: _Section) -> list[list[tuple[Block, tuple[str, ...]]]]
             groups.append(current)
             current = []
     if current:
-        # Fold a short tail into the previous leaf rather than emitting a stub.
-        tail_tokens = estimate_tokens(" ".join(b.text for b, _ in current))
-        if groups and tail_tokens < MIN_LEAF_TOKENS and groups[-1][-1][1] == current[0][1]:
+        # Fold a short tail into the previous leaf rather than emitting a
+        # stub, but never at the cost of breaching the cap.
+        tail_text = " ".join(b.text for b, _ in current)
+        tail_tokens = estimate_tokens(tail_text)
+        previous_fits = (
+            groups
+            and groups[-1][-1][1] == current[0][1]
+            and estimate_tokens(" ".join(b.text for b, _ in groups[-1])) + tail_tokens
+            <= MAX_LEAF_TOKENS
+        )
+        if previous_fits and tail_tokens < MIN_LEAF_TOKENS:
             groups[-1].extend(current)
         else:
             groups.append(current)
@@ -224,12 +271,16 @@ def chunk_document(document: ParsedDocument) -> list[LeafChunk]:
             leaf_text = "\n\n".join(b.text for b in blocks)
 
             # Overlap: carry the tail of the previous leaf so a claim split
-            # across a boundary is still retrievable from either side.
+            # across a boundary is still retrievable from either side. Capped,
+            # because an unbounded tail would breach HARD_MAX_LEAF_TOKENS.
             if position > 0 and OVERLAP_SENTENCES:
                 previous = " ".join(b.text for b, _ in groups[position - 1])
-                carried = split_sentences(previous)[-OVERLAP_SENTENCES:]
+                carried = " ".join(split_sentences(previous)[-OVERLAP_SENTENCES:])
+                if estimate_tokens(carried) > MAX_OVERLAP_TOKENS:
+                    words = carried.split()
+                    carried = " ".join(words[-max(1, int(MAX_OVERLAP_TOKENS / 1.3)) :])
                 if carried:
-                    leaf_text = " ".join(carried) + "\n\n" + leaf_text
+                    leaf_text = carried + "\n\n" + leaf_text
 
             heading_path = group[-1][1]
             page_start, page_end = _pages(blocks)

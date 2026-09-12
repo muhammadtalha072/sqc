@@ -280,3 +280,73 @@ def test_boundary_defaults_when_document_has_no_headings():
     from sqc.core.ingestion.chunking import DEFAULT_PARENT_BOUNDARY_LEVEL, parent_boundary_level
 
     assert parent_boundary_level((Block("Just prose."),)) == DEFAULT_PARENT_BOUNDARY_LEVEL
+
+
+# -------------------------------------------------- hard size ceiling
+# Regression: a real university policy produced a 712-token chunk, and the
+# underlying cause was unbounded. Text with no sentence punctuation the
+# splitter recognised - a control matrix serialised as pipe-delimited rows -
+# survived sentence splitting as a single unit and was stored whole.
+
+
+def test_table_without_sentence_punctuation_is_split():
+    from sqc.core.ingestion.chunking import HARD_MAX_LEAF_TOKENS
+
+    table = "\n".join(
+        f"Control {i} | Owner {i} | Reviewed annually by security | Implemented"
+        for i in range(60)
+    )
+    chunks = chunk_document(make_doc([Block("3. Controls", "heading", 1), Block(table, "table")]))
+    assert len(chunks) > 1, "a 60-row control matrix must not become one chunk"
+    assert max(c.token_count for c in chunks) <= HARD_MAX_LEAF_TOKENS
+
+
+def test_semicolon_enumeration_is_split():
+    from sqc.core.ingestion.chunking import HARD_MAX_LEAF_TOKENS
+
+    body = "; ".join(f"the University shall maintain control {i} on all systems" for i in range(80))
+    chunks = chunk_document(make_doc([Block("A. Duties", "heading", 1), Block(body)]))
+    assert max(c.token_count for c in chunks) <= HARD_MAX_LEAF_TOKENS
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        " ".join("word" for _ in range(2000)),
+        "x" * 5000,
+        "\n".join("a | b | c" for _ in range(400)),
+        ". ".join("lower case sentence that never capitalises" for _ in range(200)),
+        "\u2022 " + "\n\u2022 ".join(f"bullet item number {i}" for i in range(300)),
+    ],
+    ids=["no-punctuation", "one-huge-word", "wide-table", "lowercase-sentences", "bullets"],
+)
+def test_no_input_can_breach_the_hard_ceiling(body):
+    """The guarantee, stated as a property: whatever the source text, no
+    stored chunk exceeds the ceiling. Embedding providers reject oversized
+    inputs, so an unbounded chunk fails ingestion at the worst moment."""
+    from sqc.core.ingestion.chunking import HARD_MAX_LEAF_TOKENS
+
+    chunks = chunk_document(make_doc([Block("1. Section", "heading", 1), Block(body)]))
+    assert chunks
+    assert max(c.token_count for c in chunks) <= HARD_MAX_LEAF_TOKENS
+
+
+def test_overlap_cannot_push_a_chunk_over_the_ceiling():
+    from sqc.core.ingestion.chunking import HARD_MAX_LEAF_TOKENS, MAX_OVERLAP_TOKENS
+
+    long_sentence = " ".join(f"clause{i} of the policy applies to all systems" for i in range(60))
+    blocks = [Block("1. Scope", "heading", 1)]
+    blocks += [Block(f"{long_sentence}. Section {i} ends here.") for i in range(4)]
+    chunks = chunk_document(make_doc(blocks))
+    assert max(c.token_count for c in chunks) <= HARD_MAX_LEAF_TOKENS
+    assert MAX_OVERLAP_TOKENS < HARD_MAX_LEAF_TOKENS
+
+
+def test_hard_split_preserves_all_words():
+    """Cutting mid-sentence is acceptable; losing text is not."""
+    from sqc.core.ingestion.chunking import _hard_split
+
+    body = " ".join(f"token{i}" for i in range(500))
+    pieces = _hard_split(body, 100)
+    assert len(pieces) > 1
+    assert " ".join(pieces).split() == body.split()
