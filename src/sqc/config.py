@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # answering
     llm_provider: str = "fake"
-    llm_model: str = "claude-sonnet-4-6"
+    llm_model: str = "claude-sonnet-5"
 
     # retrieval
     candidates_per_retriever: int = Field(default=40, ge=1, le=200)

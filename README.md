@@ -6,7 +6,16 @@ Core principle: **never guess.** Unsupported questions are refused, not answered
 ## Status
 - Step 1 complete: schema + forced-RLS tenant isolation, verified against Postgres 16 / pgvector.
 - Step 2 complete: PDF / DOCX / TXT parsing and section-aware small-to-big chunking.
-- Next: step 3, provider protocols (embedding / rerank / LLM) with deterministic fakes for CI.
+- Step 3 complete: embedding / rerank / LLM provider protocols, Voyage + Anthropic
+  clients, and deterministic fakes so the full suite runs offline with no API keys.
+- Next: step 4, ingestion into Postgres (first step needing a real embedding key).
+
+## Providers
+Set in `.env`. Defaults are `fake`, so `pytest` never needs a key or a network.
+For real runs set `SQC_EMBEDDING_PROVIDER=voyage`, `SQC_RERANK_PROVIDER=voyage`,
+`SQC_LLM_PROVIDER=anthropic` and supply `VOYAGE_API_KEY` and `ANTHROPIC_API_KEY`.
+`SQC_EMBEDDING_DIM` must match the dimension the schema was migrated with;
+changing it requires re-running `scripts/init_db.py` and re-embedding.
 
 ### Known gap
 Every parser test runs against generated PDFs and DOCX files. Heading detection
