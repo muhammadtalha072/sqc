@@ -19,6 +19,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from dataclasses import dataclass
+
+from sqc.core.answering.entailment import Entailment, EntailmentProvider
 from sqc.core.answering.schema import (
     AnswerStatus,
     AnswerType,
@@ -26,6 +29,26 @@ from sqc.core.answering.schema import (
     Claim,
 )
 from sqc.core.retrieval.types import Evidence
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationOutcome:
+    """What the validator decided and why.
+
+    failure_stage separates the three ways an answer can fail to land:
+    retrieval never found the evidence, the answering model misused evidence
+    it had, or a validation check rejected the result. Without that split a
+    refusal rate says the system is cautious but not where to fix it.
+    """
+
+    status: AnswerStatus
+    answer: str
+    answer_type: AnswerType | None
+    claims: list[Claim]
+    errors: list[str]
+    reason: str
+    signals: dict[str, Any]
+    failure_stage: str | None = None
 
 # Tokens that make a claim checkable: anything carrying a digit, plus the
 # standards questionnaires care about. A fabricated "AES-256" or "90 days"
@@ -73,26 +96,49 @@ def find_unsupported_literals(answer: str, cited_text: str) -> list[str]:
 
 
 def _as_text(value: Any) -> str:
-    return value.strip() if isinstance(value, str) else ""
+    """Read a string field, repairing escape sequences the model emitted
+    literally.
+
+    Models occasionally write the two characters backslash-n inside a JSON
+    string rather than a real newline. Harmless in a terminal, visible as
+    stray backslashes the moment an answer is pasted into a questionnaire
+    cell, which is where these answers are going.
+    """
+    if not isinstance(value, str):
+        return ""
+    return (
+        value.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", " ").strip()
+    )
 
 
 def validate(
     raw: dict[str, Any],
     evidence: tuple[Evidence, ...] | list[Evidence],
-) -> tuple[AnswerStatus, str, AnswerType | None, list[Claim], list[str], str]:
-    """Validate model output.
-
-    Returns (status, answer, answer_type, claims, validation_errors, reason).
-    """
+    entailment: EntailmentProvider | None = None,
+    question: str = "",
+) -> ValidationOutcome:
+    """Validate model output against the evidence that was retrieved."""
     errors: list[str] = []
+    signals: dict[str, Any] = {
+        "entailment_provider": entailment.name if entailment else None,
+        "claims_entailed": 0,
+        "claims_unentailed": 0,
+        "claims_contradicted": 0,
+        "exception_omitted": False,
+        "scope_mismatch": False,
+        "stale_citation": False,
+        "date_conflict": False,
+        "unsupported_literals": [],
+    }
     by_handle = {item.evidence_id: item for item in evidence}
 
     # --- 1. shape -------------------------------------------------------
     if not isinstance(raw, dict):
-        return (
+        return ValidationOutcome(
             AnswerStatus.REFUSED, "", None, [],
             ["model output was not an object"],
             "the answering model returned output that could not be read",
+            signals, "answering",
         )
 
     answer = _as_text(raw.get("answer"))
@@ -169,25 +215,72 @@ def validate(
 
     # --- refusals -------------------------------------------------------
     if not evidence:
-        return (
+        return ValidationOutcome(
             AnswerStatus.REFUSED, "", answer_type, claims, errors,
-            "no evidence was retrieved for this question",
+            "no evidence was retrieved for this question", signals, "retrieval",
         )
     if raw.get("evidence_sufficient") is False or answer_type is AnswerType.NOT_FOUND:
-        return (
+        return ValidationOutcome(
             AnswerStatus.REFUSED, "", answer_type, claims, errors,
             reason or "the retrieved evidence does not answer this question",
+            signals, "retrieval",
         )
     if not supported_claims:
-        return (
+        # The distinction matters for diagnosis. No claims at all means the
+        # answering model produced nothing to check. Claims that all got
+        # dropped means it produced something and validation rejected it.
+        made_claims = bool(claims)
+        return ValidationOutcome(
             AnswerStatus.REFUSED, "", answer_type, claims, errors,
-            "no claim in the generated answer was supported by retrieved evidence",
+            (
+                "no claim in the generated answer was supported by retrieved evidence"
+                if made_claims
+                else "the answering model produced no claims to check"
+            ),
+            signals, "validation" if made_claims else "answering",
         )
     if not answer:
-        return (
+        return ValidationOutcome(
             AnswerStatus.REFUSED, "", answer_type, claims, errors,
             "the answering model produced claims but no answer text",
+            signals, "answering",
         )
+
+    # --- entailment: a citation alone does not confer support -----------
+    if entailment is not None:
+        judged: list[Claim] = []
+        for claim in claims:
+            if not claim.supported:
+                judged.append(claim)
+                continue
+            cited = " ".join(
+                by_handle[c.evidence_id].text
+                for c in claim.citations
+                if c.evidence_id in by_handle
+            )
+            verdict = entailment.check(claim.text, cited)
+            judged.append(
+                Claim(
+                    text=claim.text,
+                    citations=claim.citations,
+                    # The verdict is probabilistic, so it never deletes a
+                    # claim. It downgrades the answer to human review and
+                    # records why.
+                    supported=claim.supported,
+                    problem=claim.problem,
+                    entailment=verdict.label.value,
+                    entailment_score=verdict.score,
+                    entailment_detail=verdict.detail,
+                )
+            )
+            if verdict.label is Entailment.SUPPORTED:
+                signals["claims_entailed"] += 1
+            elif verdict.label is Entailment.CONTRADICTED:
+                signals["claims_contradicted"] += 1
+            elif verdict.label is Entailment.UNSUPPORTED:
+                signals["claims_unentailed"] += 1
+        claims = judged
+        supported_claims = [c for c in claims if c.supported]
 
     # --- review triggers ------------------------------------------------
     review: list[str] = []
@@ -195,14 +288,41 @@ def validate(
     if len(supported_claims) != len(claims):
         review.append("some claims were dropped because their citations did not resolve")
 
+    if signals["claims_contradicted"]:
+        review.append(
+            f"{signals['claims_contradicted']} claim(s) contradicted by the cited evidence"
+        )
+    if signals["claims_unentailed"]:
+        review.append(
+            f"{signals['claims_unentailed']} claim(s) not supported by the evidence cited "
+            "for them"
+        )
+
     cited_text = " ".join(
         by_handle[c.evidence_id].text
         for claim in supported_claims
         for c in claim.citations
         if c.evidence_id in by_handle
     )
+
+    omitted = find_omitted_exception(answer, cited_text)
+    if omitted:
+        signals["exception_omitted"] = True
+        review.append(omitted)
+
+    mismatch = find_scope_mismatch(question, answer, cited_text)
+    if mismatch:
+        signals["scope_mismatch"] = True
+        review.append(mismatch)
+
+    stale = find_stale_citation(supported_claims, list(evidence))
+    if stale:
+        signals["stale_citation"] = True
+        review.append(stale)
+
     unsupported_literals = find_unsupported_literals(answer, cited_text)
     if unsupported_literals:
+        signals["unsupported_literals"] = unsupported_literals
         errors.append(
             "answer contains figures absent from cited evidence: "
             + ", ".join(unsupported_literals)
@@ -219,21 +339,99 @@ def validate(
 
     conflict = _detect_source_conflict(supported_claims)
     if conflict:
+        signals["date_conflict"] = True
         review.append(conflict)
 
     if answer_type is AnswerType.PARTIAL:
         review.append("the evidence covers the question only partially")
 
     if review:
-        return (
+        return ValidationOutcome(
             AnswerStatus.REVIEW_REQUIRED, answer, answer_type, claims, errors,
-            "; ".join(review),
+            "; ".join(review), signals, "validation",
         )
-    return (
+    return ValidationOutcome(
         AnswerStatus.SUPPORTED, answer, answer_type, claims, errors,
-        reason or "every claim is supported by the cited evidence",
+        reason or "every claim is supported by the cited evidence", signals, None,
     )
 
+
+
+# ---------------------------------------------------------------- new checks
+
+_EXCEPTION_MARKERS = re.compile(
+    r"\b(?:except(?:ion|ions|ed)?\b|exempt(?:ion|ions|ed)?\b|unless\b|"
+    r"does not apply\b|do not apply\b|other than\b|save for\b|carve[- ]out\b)",
+    re.I,
+)
+_UNIVERSAL = re.compile(r"\b(?:all|every|any|each|always|entire|whole)\b", re.I)
+_SCOPE_LIMITS = re.compile(
+    r"\b(?:only|solely|limited to|administrators?|privileged|service accounts?|"
+    r"break[- ]glass|certain|some|specific|designated|where (?:applicable|feasible)|"
+    r"as (?:applicable|appropriate))\b",
+    re.I,
+)
+
+
+def find_omitted_exception(answer: str, cited_text: str) -> str | None:
+    """Cited evidence carries an exception the answer does not mention.
+
+    The canonical dangerous answer in this product: the evidence says MFA is
+    required except for break-glass accounts, and the answer says MFA is
+    required. Every word of it is in the source and it is still misleading,
+    which is why omission is checked rather than only fabrication.
+    """
+    if not _EXCEPTION_MARKERS.search(cited_text):
+        return None
+    if _EXCEPTION_MARKERS.search(answer):
+        return None
+    sentences = [
+        s.strip() for s in re.split(r"(?<=[.!?])\s+", cited_text) if _EXCEPTION_MARKERS.search(s)
+    ]
+    excerpt = sentences[0][:160] if sentences else "an exception"
+    return f"cited evidence contains an exception the answer omits: {excerpt}"
+
+
+def find_scope_mismatch(question: str, answer: str, cited_text: str) -> str | None:
+    """The question asks universally; the evidence answers narrowly.
+
+    'Do you require MFA for all employees?' answered from a control that
+    applies to administrators is not a yes. Detected structurally: a
+    universal quantifier in the question, a scope limiter in the evidence,
+    and an answer that acknowledges neither.
+    """
+    if not _UNIVERSAL.search(question):
+        return None
+    limiter = _SCOPE_LIMITS.search(cited_text)
+    if not limiter:
+        return None
+    if _SCOPE_LIMITS.search(answer) or _UNIVERSAL.search(answer):
+        return None
+    return (
+        f"question asks universally but the cited evidence is limited "
+        f"('{limiter.group(0)}') and the answer does not say so"
+    )
+
+
+def find_stale_citation(claims: list[Claim], evidence: list[Evidence]) -> str | None:
+    """An answer resting on a superseded document.
+
+    If newer evidence was retrieved for the same source and the answer cites
+    only the older one, the customer may be certifying last year's policy.
+    """
+    dated = [item for item in evidence if item.effective_date is not None]
+    if len(dated) < 2:
+        return None
+    newest = max(item.effective_date for item in dated)
+    cited_dates = {
+        c.effective_date for claim in claims for c in claim.citations if c.effective_date
+    }
+    if not cited_dates or newest in cited_dates:
+        return None
+    return (
+        f"every citation comes from evidence effective {max(cited_dates)}, but newer "
+        f"evidence effective {newest} was retrieved and not cited"
+    )
 
 def _detect_source_conflict(claims: list[Claim]) -> str | None:
     """Flag evidence drawn from different versions of the same document.

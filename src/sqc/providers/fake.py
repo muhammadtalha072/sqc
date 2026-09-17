@@ -85,10 +85,14 @@ class HashingEmbedder:
 
 
 class LexicalReranker:
-    """Overlap-based reranker standing in for a cross-encoder.
+    """Overlap-based reranker standing in for a cross-encoder. TESTS ONLY.
 
-    Scores by the share of query tokens present in the document, which
-    correlates loosely with relevance and is completely repeatable.
+    Scores by the share of query tokens present in the document, which is
+    repeatable but a poor proxy for relevance. Measured against a real
+    policy it demoted the chunk that answered the question from first place
+    to eighth, because the length penalty punishes exactly the long
+    definition sections that questionnaires ask about. Use it to test that
+    reranking is wired up, never to decide what a customer sees.
     """
 
     model = "fake-lexical-rerank-v1"

@@ -565,3 +565,13 @@ def test_acronym_expansion_is_what_makes_lexical_retrieval_find_mfa(corpus, embe
     assert bare == 0, "fixture invalid: the policy must not contain the literal acronym"
     assert expanded, "expansion failed; lexical retrieval found nothing"
     assert "Multi-factor authentication is required" in expanded[0].text
+
+
+def test_reranking_defaults_to_none_not_fake():
+    """Measured against a real policy, the fake reranker demoted the chunk
+    that answered the question from first place to eighth and the system
+    refused a question it had the evidence for. A stand-in that ranks worse
+    than plain fusion must not be the runtime default."""
+    from sqc.config import Settings
+
+    assert Settings().rerank_provider == "none"

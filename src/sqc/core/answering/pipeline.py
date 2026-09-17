@@ -22,6 +22,7 @@ from sqc.core.answering.schema import (
     AnswerStatus,
     Citation,
 )
+from sqc.core.answering.entailment import EntailmentProvider
 from sqc.core.answering.validator import validate
 from sqc.core.retrieval.pipeline import retrieve
 from sqc.core.retrieval.types import RetrievalResult
@@ -39,6 +40,7 @@ def answer_question(
     reranker: RerankProvider | None = None,
     settings: Settings | None = None,
     document_ids: list[uuid.UUID] | None = None,
+    entailment: EntailmentProvider | None = None,
 ) -> AnswerResult:
     """Answer one questionnaire question from one tenant's evidence."""
     settings = settings or get_settings()
@@ -77,6 +79,7 @@ def answer_question(
         return _refusal(
             question=question,
             reason=f"the answering model could not be reached: {exc}",
+            stage="provider",
             retrieval=retrieval,
             embedder=embedder,
             started=started,
@@ -87,6 +90,7 @@ def answer_question(
         return _refusal(
             question=question,
             reason="the answering model failed unexpectedly",
+            stage="provider",
             retrieval=retrieval,
             embedder=embedder,
             started=started,
@@ -94,9 +98,11 @@ def answer_question(
             errors=(f"unhandled provider fault: {type(exc).__name__}",),
         )
 
-    status, answer, answer_type, claims, errors, reason = validate(
-        response.data, retrieval.evidence
+    outcome = validate(
+        response.data, retrieval.evidence, entailment=entailment, question=question
     )
+    status, answer, answer_type = outcome.status, outcome.answer, outcome.answer_type
+    claims, errors, reason = outcome.claims, outcome.errors, outcome.reason
 
     citations: list[Citation] = []
     seen: set[str] = set()
@@ -118,6 +124,8 @@ def answer_question(
         ),
         reason=reason,
         validation_errors=tuple(errors),
+        validation_signals=outcome.signals,
+        failure_stage=outcome.failure_stage,
         evidence=retrieval.evidence,
         retrieval_signals=retrieval.signals,
         llm_model=response.model,
@@ -140,6 +148,7 @@ def _refusal(
     started: float,
     llm_model: str | None = None,
     errors: tuple[str, ...] = (),
+    stage: str = "retrieval",
 ) -> AnswerResult:
     """A refusal that still carries its evidence and signals.
 
@@ -157,6 +166,7 @@ def _refusal(
         ),
         retrieval_signals=retrieval.signals,
         validation_errors=errors,
+        failure_stage=stage,
         llm_model=llm_model,
         embedding_model=getattr(embedder, "model", None),
         prompt_version=PROMPT_VERSION,

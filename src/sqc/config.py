@@ -17,14 +17,40 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://sqc_app:changeme@localhost:5432/sqc"
     admin_database_url: str = "postgresql+psycopg://sqc:sqc@localhost:5432/sqc"
 
+    # Provider credentials. These carry explicit aliases because they are
+    # conventionally unprefixed: a user who writes GEMINI_API_KEY in .env
+    # expects it to be read, and env_prefix would otherwise make the setting
+    # SQC_GEMINI_API_KEY and silently ignore the line they actually wrote.
+    anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
+    gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
+    voyage_api_key: str = Field(default="", validation_alias="VOYAGE_API_KEY")
+
     # embeddings
     embedding_provider: str = "fake"
     embedding_model: str = "voyage-3"
     embedding_dim: int = 1024
 
-    # reranking
-    rerank_provider: str = "fake"
+    # Reranking defaults to none, not fake. Measured on a real policy, the
+    # fake reranker demoted the chunk that answered the question from first
+    # place to eighth, and the system refused a question it had the evidence
+    # for. A stand-in that scores worse than no reranker makes the product
+    # quietly worse than if the feature did not exist.
+    rerank_provider: str = "none"
     rerank_model: str = "rerank-2"
+
+    # Entailment checking: none | lexical | llm. Defaults to lexical
+    # because it costs nothing and catches the failure that matters most,
+    # a claim naming a figure or standard the evidence never mentions.
+    entailment_provider: str = "lexical"
+
+    # Provider retry budget. Kept small on purpose. Raising it to 8 with a
+    # two-second base delay cost two minutes of sleeping per failing call
+    # and recovered nothing across four evaluation runs, while consuming
+    # eight requests per failure against a 250-request daily free tier.
+    # Retries help with transient throttling; an exhausted quota now
+    # raises ProviderQuotaError on the first response instead.
+    llm_max_attempts: int = Field(default=4, ge=1, le=12)
+    llm_base_delay: float = Field(default=0.5, ge=0.0, le=30.0)
 
     # answering
     llm_provider: str = "fake"

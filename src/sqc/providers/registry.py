@@ -47,7 +47,11 @@ def build_embedding_provider(settings: Settings | None = None) -> EmbeddingProvi
     if name == "voyage":
         from sqc.providers.voyage import VoyageEmbedder
 
-        return VoyageEmbedder(model=settings.embedding_model, dimension=settings.embedding_dim)
+        return VoyageEmbedder(
+            model=settings.embedding_model,
+            dimension=settings.embedding_dim,
+            api_key=settings.voyage_api_key or None,
+        )
     raise ProviderError(
         f"unknown SQC_EMBEDDING_PROVIDER '{settings.embedding_provider}'; "
         "supported: voyage, fake"
@@ -64,10 +68,32 @@ def build_rerank_provider(settings: Settings | None = None) -> RerankProvider:
     if name == "voyage":
         from sqc.providers.voyage import VoyageReranker
 
-        return VoyageReranker(model=settings.rerank_model)
+        return VoyageReranker(
+            model=settings.rerank_model, api_key=settings.voyage_api_key or None
+        )
     raise ProviderError(
         f"unknown SQC_RERANK_PROVIDER '{settings.rerank_provider}'; "
         "supported: voyage, none, fake"
+    )
+
+
+def build_entailment_provider(settings: Settings | None = None):  # noqa: ANN201
+    """Build the claim-support checker. None disables the check entirely."""
+    settings = settings or get_settings()
+    name = settings.entailment_provider.lower()
+    if name == "none":
+        return None
+    if name == "lexical":
+        from sqc.core.answering.entailment import LexicalEntailment
+
+        return LexicalEntailment()
+    if name == "llm":
+        from sqc.core.answering.entailment import LLMEntailment
+
+        return LLMEntailment(build_llm_provider(settings))
+    raise ProviderError(
+        f"unknown SQC_ENTAILMENT_PROVIDER '{settings.entailment_provider}'; "
+        "supported: lexical, llm, none"
     )
 
 
@@ -79,7 +105,25 @@ def build_llm_provider(settings: Settings | None = None) -> LLMProvider:
     if name == "anthropic":
         from sqc.providers.anthropic_llm import AnthropicLLM
 
-        return AnthropicLLM(model=settings.llm_model)
+        return AnthropicLLM(
+            model=settings.llm_model, api_key=settings.anthropic_api_key or None,
+            max_attempts=settings.llm_max_attempts, base_delay=settings.llm_base_delay,
+        )
+    if name == "gemini":
+        from sqc.providers.gemini import DEFAULT_MODEL, GeminiLLM
+
+        # The configured model name defaults to an Anthropic one, so fall
+        # back rather than sending a model id Gemini will 404 on.
+        model = settings.llm_model if "gemini" in settings.llm_model.lower() else DEFAULT_MODEL
+        return GeminiLLM(
+            model=model, api_key=settings.gemini_api_key or None,
+            max_attempts=settings.llm_max_attempts, base_delay=settings.llm_base_delay,
+        )
+    if name == "manual":
+        from sqc.providers.manual import ManualLLM
+
+        return ManualLLM()
     raise ProviderError(
-        f"unknown SQC_LLM_PROVIDER '{settings.llm_provider}'; supported: anthropic, fake"
+        f"unknown SQC_LLM_PROVIDER '{settings.llm_provider}'; "
+        "supported: anthropic, gemini, manual, fake"
     )

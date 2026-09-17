@@ -8,6 +8,7 @@ that reaches the pipeline as a ProviderError has already exhausted retries.
 from __future__ import annotations
 
 import random
+import re
 import time
 from typing import Any
 
@@ -15,11 +16,24 @@ import httpx
 
 from sqc.providers.base import (
     ProviderAuthError,
+    ProviderQuotaError,
     ProviderRateLimitError,
     ProviderResponseError,
 )
 
 RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+
+# A 429 can mean two different things and only one of them is worth waiting
+# for. Rate limiting clears in seconds; an exhausted daily quota does not
+# clear until it resets, so retrying it burns the remaining allowance on
+# calls that cannot succeed. An eight-attempt budget against a 250-request
+# daily free tier consumed most of a day's quota in one evaluation run.
+_QUOTA_EXHAUSTED = re.compile(
+    r"RESOURCE_EXHAUSTED|quota (?:exceeded|exhausted)|daily limit|"
+    r"insufficient[_ ]quota|billing",
+    re.I,
+)
+
 DEFAULT_MAX_ATTEMPTS = 4
 DEFAULT_BASE_DELAY = 0.5
 DEFAULT_TIMEOUT = 60.0
@@ -63,8 +77,13 @@ class HttpProviderClient:
                     "check the API key in .env"
                 )
             if response.status_code in RETRY_STATUS:
+                body = response.text[:400]
+                if response.status_code == 429 and _QUOTA_EXHAUSTED.search(body):
+                    raise ProviderQuotaError(
+                        f"{path} quota exhausted: {body.strip()[:250]}"
+                    )
                 last_error = ProviderRateLimitError(
-                    f"{path} returned {response.status_code}: {response.text[:200]}"
+                    f"{path} returned {response.status_code}: {body[:200]}"
                 )
                 if attempt == self.max_attempts - 1:
                     break

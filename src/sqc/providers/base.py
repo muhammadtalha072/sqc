@@ -28,6 +28,15 @@ class ProviderRateLimitError(ProviderError):
     """Rate limited after exhausting retries."""
 
 
+class ProviderQuotaError(ProviderRateLimitError):
+    """The allowance is gone, not merely throttled.
+
+    Separate from rate limiting because only one of them is worth waiting
+    for. Throttling clears in seconds; an exhausted daily quota does not
+    clear until it resets, so retrying it spends the remaining allowance on
+    calls that cannot succeed."""
+
+
 class ProviderResponseError(ProviderError):
     """Reachable but returned something unusable."""
 

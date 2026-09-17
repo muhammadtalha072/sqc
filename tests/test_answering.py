@@ -264,7 +264,7 @@ def test_evidence_with_differing_effective_dates_forces_review():
                  page_start=1, page_end=1, effective_date=date(2024, 1, 1), score=1.0,
                  citation="v2.pdf p1"),
     ]
-    status, _, _, _, _, reason = validate(
+    outcome = validate(
         {
             "answer": "MFA is required.", "answer_type": "yes",
             "claims": [{"text": "MFA is required.", "evidence_ids": ["E1", "E2"]}],
@@ -272,8 +272,10 @@ def test_evidence_with_differing_effective_dates_forces_review():
         },
         items,
     )
-    assert status is AnswerStatus.REVIEW_REQUIRED
-    assert "effective dates" in reason
+    assert outcome.status is AnswerStatus.REVIEW_REQUIRED
+    assert "effective dates" in outcome.reason
+    assert outcome.signals["date_conflict"] is True
+    assert outcome.failure_stage == "validation"
 
 
 # --------------------------------------------------------------- refusals
@@ -657,3 +659,28 @@ def test_audit_record_actually_inserts_into_answer_runs(tenants, embedder):
     assert "AES-256" in row[1]
     assert row[2][0]["chunk_ids"], "citation chunk ids must survive the round trip"
     assert row[3] > 0
+
+
+def test_literal_escape_sequences_in_answers_are_repaired(tenants, embedder):
+    """Models sometimes emit the two characters backslash-n inside a JSON
+    string. Invisible in a terminal, visible as stray backslashes the moment
+    the answer is pasted into a questionnaire cell."""
+    acme, _ = tenants
+    probe = ask(acme, "Is data encrypted at rest?", embedder,
+                scripted({"answer": "", "answer_type": "not_found", "claims": [],
+                          "evidence_sufficient": False, "reason": "probe"}))
+    handle = evidence_handles(probe)[0]
+
+    result = ask(
+        acme, "Is data encrypted at rest?", embedder,
+        scripted({
+            "answer": "Data is encrypted at rest.\\n\\nKeys are rotated annually.",
+            "answer_type": "yes",
+            "claims": [{"text": "Data is encrypted at rest.\\nKeys rotate.",
+                        "evidence_ids": [handle]}],
+            "evidence_sufficient": True, "reason": "stated",
+        }),
+    )
+    assert "\\n" not in result.answer, "literal backslash-n leaked into the answer"
+    assert "\n" in result.answer, "the line break should survive as a real newline"
+    assert "\\n" not in result.claims[0].text

@@ -125,12 +125,20 @@ class Claim:
     supported: bool = True
     problem: str | None = None
     """Why the claim was rejected, when it was."""
+    entailment: str | None = None
+    """supported | unsupported | contradicted | unknown, or None when no
+    entailment checker ran. A citation alone no longer confers support."""
+    entailment_score: float | None = None
+    entailment_detail: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "text": self.text,
             "supported": self.supported,
             "problem": self.problem,
+            "entailment": self.entailment,
+            "entailment_score": self.entailment_score,
+            "entailment_detail": self.entailment_detail,
             "citations": [c.as_dict() for c in self.citations],
         }
 
@@ -148,6 +156,14 @@ class AnswerResult:
     evidence_chunk_ids: tuple[uuid.UUID, ...] = ()
     reason: str = ""
     validation_errors: tuple[str, ...] = ()
+    validation_signals: dict[str, Any] = field(default_factory=dict)
+    """Every check the validator ran and what it found. Kept so the eval
+    suite can tell which check caused a status, and so a threshold can be
+    calibrated later from recorded distributions rather than guessed."""
+    failure_stage: str | None = None
+    """retrieval | answering | validation | provider, when the outcome was
+    not a clean answer. Separating these is the difference between knowing
+    the system failed and knowing where."""
     evidence: tuple[Evidence, ...] = ()
     retrieval_signals: RetrievalSignals = field(default_factory=RetrievalSignals)
     llm_model: str | None = None
@@ -188,6 +204,8 @@ class AnswerResult:
                 "claims_unsupported": sum(1 for c in self.claims if not c.supported),
                 "validation_errors": list(self.validation_errors),
                 "answer_type": self.answer_type.value if self.answer_type else None,
+                "failure_stage": self.failure_stage,
+                **{f"check_{k}": v for k, v in self.validation_signals.items()},
             },
             "llm_model": self.llm_model,
             "embedding_model": self.embedding_model,

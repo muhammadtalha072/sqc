@@ -1,0 +1,157 @@
+name: depaul-isp-v1
+document: depaul_isp.pdf
+description: >
+  Golden cases for DePaul University's published Information Security Policy
+  (effective 2017-03-31). Ground truth was established by reading the PDF and
+  by substring queries against the ingested chunks, not by asking a model
+  whether an answer looked right.
+
+  The unanswerable cases matter as much as the answerable ones. A system that
+  scores well here by answering everything would show a false answer rate
+  above zero, which is the metric that should stop a release.
+source: https://offices.depaul.edu/secretary/policies-procedures/policies/
+
+documents:
+  - tests/data/depaul_isp.pdf
+
+cases:
+  # ---------------------------------------------------------- answerable
+  - id: covered-data-definition
+    category: data_classification
+    question: What types of information are treated as covered data?
+    expect_status: answered
+    expect_text:
+      - "Covered Data"
+      - "Social security numbers"
+    expect_answer_contains:
+      - "social security"
+    expect_sections:
+      - "DEFINITIONS"
+    forbid_literals:
+      - "SOC 2"
+      - "ISO 27001"
+    note: >
+      Regression case. This was refused while the fake reranker was the
+      default: it scored the definitions chunk below a loosely related
+      section, so the evidence never reached the model.
+
+  - id: breach-reporting
+    category: incident_response
+    question: How should staff report a suspected data breach?
+    expect_status: answered
+    expect_text:
+      - "Director of Information Security"
+      - "security@depaul.edu"
+    expect_answer_contains:
+      - "security@depaul.edu"
+    forbid_literals:
+      - "24 hours"
+      - "72 hours"
+    note: >
+      forbid_literals pins the most likely hallucination here - a plausible
+      statutory notification window the policy never states.
+
+  - id: responsible-officer
+    category: governance
+    question: Who is responsible for information security at your organisation?
+    expect_status: answered
+    expect_text:
+      - "Responsible Officer"
+      - "Vice President for Information Services"
+    expect_answer_contains:
+      - "Vice President for Information Services"
+    expect_sections:
+      - "RESPONSIBLE OFFICER"
+
+  - id: non-compliance
+    category: governance
+    question: What happens if someone fails to comply with the policy?
+    expect_status: answered
+    expect_text:
+      - "disciplinary action"
+    expect_answer_contains:
+      - "disciplinary"
+
+  - id: service-providers
+    category: vendor_management
+    question: What is required of third-party service providers who access your data?
+    expect_status: answered
+    expect_text:
+      - "Service Provider"
+      - "signed contract"
+    forbid_literals:
+      - "SOC 2"
+      - "penetration test"
+
+  - id: policy-effective-date
+    category: document_control
+    question: When did this information security policy take effect?
+    expect_status: answered
+    expect_text:
+      - "3/31/2017"
+    forbid_literals:
+      - "2024"
+      - "2025"
+    note: Dates are the classic fabrication. The answer must match the document.
+
+  # -------------------------------------------------------- unanswerable
+  # The policy contains none of these. Verified by substring query against
+  # the ingested chunks, not by assumption.
+  - id: soc2-certification
+    category: certifications
+    question: Are you SOC 2 Type II certified?
+    expect_status: refused
+    forbid_literals:
+      - "SOC 2"
+      - "certified"
+      - "Type II"
+    note: >
+      The highest-risk question in a real questionnaire. An invented yes here
+      is a contractual misrepresentation, not a bad answer.
+
+  - id: disaster-recovery-rto
+    category: business_continuity
+    question: What is your disaster recovery RTO?
+    expect_status: refused
+    forbid_literals:
+      - "hours"
+      - "RTO is"
+
+  - id: mfa-requirement
+    category: access_control
+    question: Do you require multi-factor authentication for all employees?
+    expect_status: refused
+    forbid_literals:
+      - "multi-factor authentication is required"
+      - "MFA is required"
+    note: The policy never mentions MFA in any form.
+
+  - id: encryption-at-rest
+    category: encryption
+    question: Do you encrypt customer data at rest, and with what algorithm?
+    expect_status: refused
+    forbid_literals:
+      - "AES"
+      - "AES-256"
+      - "TLS"
+    note: >
+      The word "encrypt" appears once in the corpus but no control is stated.
+      A near-miss like this is where an over-eager system invents AES-256.
+
+  - id: pentest-frequency
+    category: vulnerability_management
+    question: How often do you perform third-party penetration testing?
+    expect_status: refused
+    forbid_literals:
+      - "annually"
+      - "quarterly"
+      - "penetration test is"
+
+  - id: subprocessor-list
+    category: vendor_management
+    question: Please provide your current list of subprocessors.
+    expect_status: refused
+    forbid_literals:
+      - "AWS"
+      - "Azure"
+      - "Google Cloud"

@@ -11,13 +11,53 @@ Core principle: **never guess.** Unsupported questions are refused, not answered
 - Step 4 complete: ingestion pipeline into Postgres, plus CLI tools.
 - Step 5 complete: hybrid retrieval (full-text + vector + RRF + rerank + evidence packing).
 - Step 6 complete: evidence-grounded answering, deterministic validator, refusal states.
-- Next: step 7, evaluation harness and golden dataset (then threshold calibration).
+- Step 7 complete: golden datasets, eval harness with record/replay, claim-level
+  entailment, and failure-stage separation.
+
+## Evaluation
+```bash
+python scripts/eval_setup.py                      # one isolated tenant per dataset
+python -m evals.run --dataset evals/datasets/acme-edge-cases-v1.yaml
+python -m evals.run --dataset evals/datasets/depaul-isp-v1.yaml
+python -m evals.run --dataset <path> --replay     # free, offline, zero API calls
+python -m evals.run --dataset <path> --baseline evals/results/baseline.json
+```
+Responses are cached per prompt hash, so the first run costs API calls and
+every rerun is free. Editing a prompt misses the cache by design, so a prompt
+regression cannot be scored against stale output.
+
+A claim is not supported merely because it carries a citation: the cited
+evidence must actually support it. That check sits behind `EntailmentProvider`
+and downgrades an answer to review rather than deleting a claim, because the
+checker is probabilistic.
 
 ## Answering
 ```bash
 python scripts/answer.py --tenant $TENANT "Is MFA required for all accounts?"
 python scripts/answer.py --tenant $TENANT --audit "Is data encrypted at rest?"
 ```
+### Measured behaviour
+Seven questions against a real policy (a published university ISP) and a
+real model (Gemini Flash): four answered with resolving citations, three
+refused correctly for topics the policy does not cover, no hallucinated
+answers, no hallucinated citations. A provider outage mid-run was refused
+rather than guessed at.
+
+Reranking defaults to `none`. The fake reranker demoted the chunk that
+answered a question from first place to eighth, and the system then refused
+a question it had the evidence for. Use a real reranker or none at all.
+
+### Running a real model for free
+`SQC_LLM_PROVIDER=gemini` uses Google's free tier (get a key at
+aistudio.google.com; Flash models only, and Google may train on free-tier
+data, so keep customer documents off it). `SQC_LLM_PROVIDER=manual` prints
+the prompt for you to paste into any chat window and reads the JSON back -
+no account, no cost, same validator.
+
+```bash
+python scripts/check_provider.py     # verifies the key and lists usable models
+```
+
 Status is decided by the validator, never by the model: the schema has no
 confidence field, and the model cites short handles (E1, E2) that the
 validator maps back to real chunk ids, so it cannot invent a citation.
