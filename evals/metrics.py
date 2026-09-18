@@ -144,8 +144,14 @@ def score_case(case: EvalCase, result: AnswerResult) -> CaseOutcome:
     # pipeline recorded one, that wins; otherwise a missing-evidence failure
     # is retrieval's and anything else belongs to the answering model.
     stage = result.failure_stage
-    if stage is None and failures:
-        stage = "retrieval" if retrieval_hit is False else "answering"
+    if retrieval_hit is False:
+        # The root cause is upstream. A case whose expected evidence was
+        # never retrieved was reported as a validation failure, because the
+        # validator is where the symptom surfaced - which sent the reader
+        # looking in the wrong place.
+        stage = "retrieval"
+    elif stage is None and failures:
+        stage = "answering"
 
     return CaseOutcome(
         case_id=case.id,

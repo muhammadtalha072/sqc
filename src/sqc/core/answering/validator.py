@@ -22,6 +22,7 @@ from typing import Any
 from dataclasses import dataclass
 
 from sqc.core.answering.entailment import Entailment, EntailmentProvider
+from sqc.core.answering.normalise import canonical_dates
 from sqc.core.answering.schema import (
     AnswerStatus,
     AnswerType,
@@ -61,6 +62,11 @@ _LITERAL = re.compile(
     r")\b",
     re.I,
 )
+# Evidence handles look like literals to a regex hunting for digit-bearing
+# tokens, so an answer written "as stated in E1, E2" was reported as five
+# fabricated figures. A citation marker is not a claimed fact.
+_EVIDENCE_HANDLE = re.compile(r"^E\d+$", re.I)
+
 _SPELLED_NUMBERS = {
     "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
     "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
@@ -70,7 +76,7 @@ _SPELLED_NUMBERS = {
 
 
 def _normalise(text: str) -> str:
-    lowered = text.lower()
+    lowered = canonical_dates(text).lower()
     for word, digit in _SPELLED_NUMBERS.items():
         lowered = re.sub(rf"\b{word}\b", digit, lowered)
     return re.sub(r"[\s\-]+", "", lowered)
@@ -87,8 +93,14 @@ def find_unsupported_literals(answer: str, cited_text: str) -> list[str]:
     """
     haystack = _normalise(cited_text)
     missing: list[str] = []
-    for match in _LITERAL.findall(answer):
+    for match in _LITERAL.findall(canonical_dates(answer)):
         token = match.strip()
+        if _EVIDENCE_HANDLE.match(token):
+            continue
+        # Canonical date tokens exist for comparison, not for humans. A
+        # reviewer reading "date20170304" learns nothing.
+        if token.lower().startswith("date") and len(token) == 12 and token[4:].isdigit():
+            token = f"{token[4:8]}-{token[8:10]}-{token[10:12]}"
         if _normalise(token) and _normalise(token) not in haystack:
             if token not in missing:
                 missing.append(token)
@@ -127,6 +139,7 @@ def validate(
         "exception_omitted": False,
         "scope_mismatch": False,
         "stale_citation": False,
+        "conflicting_answer_surfaced": False,
         "date_conflict": False,
         "unsupported_literals": [],
     }
@@ -220,6 +233,25 @@ def validate(
             "no evidence was retrieved for this question", signals, "retrieval",
         )
     if raw.get("evidence_sufficient") is False or answer_type is AnswerType.NOT_FOUND:
+        # Conflicting evidence is not insufficient evidence. One means no
+        # answer exists; the other means two answers exist and a human must
+        # choose. Collapsing them threw away the most useful output the
+        # system produces: a fully cited conflict.
+        #
+        # Measured case: asked for the minimum password length, the model
+        # retrieved both policy versions, produced two correctly cited claims
+        # (12 characters from 2021, 16 from 2024), identified the conflict -
+        # and the validator discarded all of it and returned a bare refusal.
+        # "I cannot determine this" is worth far less to a reviewer than
+        # "your 2021 policy says 12, your 2024 says 16, confirm which applies".
+        conflict = _cited_conflict(supported_claims, bool(raw.get("conflict_detected")))
+        if conflict:
+            signals["conflicting_answer_surfaced"] = True
+            surfaced = answer or " ".join(c.text for c in supported_claims)
+            return ValidationOutcome(
+                AnswerStatus.REVIEW_REQUIRED, surfaced, answer_type, claims, errors,
+                f"{conflict}; a reviewer must confirm which applies", signals, "validation",
+            )
         return ValidationOutcome(
             AnswerStatus.REFUSED, "", answer_type, claims, errors,
             reason or "the retrieved evidence does not answer this question",
@@ -432,6 +464,33 @@ def find_stale_citation(claims: list[Claim], evidence: list[Evidence]) -> str | 
         f"every citation comes from evidence effective {max(cited_dates)}, but newer "
         f"evidence effective {newest} was retrieved and not cited"
     )
+
+def _cited_conflict(claims: list[Claim], model_flagged: bool) -> str | None:
+    """Do the supported claims disagree across sources?
+
+    Requires two or more claims drawn from different documents, so a single
+    claim citing several sections - normal agreement - is not mistaken for
+    disagreement. The model's own conflict flag strengthens the signal but
+    does not create it, since the evidence is what has to disagree.
+    """
+    if len(claims) < 2:
+        return None
+    documents = {c.document_id for claim in claims for c in claim.citations}
+    dates = {
+        c.effective_date
+        for claim in claims
+        for c in claim.citations
+        if c.effective_date is not None
+    }
+    if len(documents) < 2 and not (model_flagged and len(dates) > 1):
+        return None
+
+    files = sorted({c.filename for claim in claims for c in claim.citations})
+    detail = f"evidence from {' and '.join(files)} disagrees"
+    if len(dates) > 1:
+        detail += f" (effective {', '.join(sorted(str(d) for d in dates))})"
+    return detail
+
 
 def _detect_source_conflict(claims: list[Claim]) -> str | None:
     """Flag evidence drawn from different versions of the same document.

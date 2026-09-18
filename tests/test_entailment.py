@@ -22,6 +22,7 @@ from sqc.core.answering.entailment import (
 from sqc.core.answering.schema import AnswerStatus, Citation, Claim
 from sqc.core.answering.validator import (
     find_omitted_exception,
+    find_unsupported_literals,
     find_scope_mismatch,
     find_stale_citation,
     validate,
@@ -366,3 +367,135 @@ def test_custom_entailment_provider_can_be_injected():
     )
     assert outcome.signals["entailment_provider"] == "always-contradicts"
     assert outcome.status is AnswerStatus.REVIEW_REQUIRED
+
+
+# ------------------------------------------- measured fixes (real-run driven)
+
+
+def test_evidence_handles_are_not_mistaken_for_fabricated_figures():
+    """An answer written 'as stated in E1, E2' was reported as five invented
+    figures, because a handle is a digit-bearing token to the literal check."""
+    assert find_unsupported_literals(
+        "As stated in E1, E2 and E3, the policy applies.", "The policy applies."
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("answer_text", "evidence_text"),
+    [
+        ("The policy took effect on 2017-03-31.", "Effective Date: 3/31/2017"),
+        ("Effective 31 March 2017.", "Effective Date: 3/31/2017"),
+        ("Effective March 31, 2017.", "Effective Date: 2017-03-31"),
+    ],
+    ids=["iso-vs-slash", "spelled-vs-slash", "mdy-vs-iso"],
+)
+def test_the_same_date_in_another_notation_is_not_a_fabrication(answer_text, evidence_text):
+    """Dates are the most common claim in a questionnaire, so a false
+    positive here is expensive. A real run flagged the correct effective
+    date purely because the model wrote it ISO-style."""
+    assert find_unsupported_literals(answer_text, evidence_text) == []
+
+
+def test_an_ambiguous_source_date_still_flags_for_review():
+    """03/04/2017 could be either day or month first. The answer cannot be
+    confirmed against it, so flagging is correct - and the reason must name
+    the date readably, not as an internal token."""
+    missing = find_unsupported_literals("Effective 2017-03-04.", "Effective Date: 03/04/2017")
+    assert missing == ["2017-03-04"]
+
+
+def test_a_genuinely_wrong_figure_is_still_caught():
+    assert "45" in find_unsupported_literals(
+        "Keys rotate every 45 days.", "Keys are rotated every 90 days."
+    )
+
+
+def test_conflicting_evidence_is_surfaced_instead_of_refused():
+    """Measured: asked the minimum password length, the model retrieved both
+    policy versions, cited each correctly, and identified the conflict. The
+    validator then discarded all of it and returned a bare refusal."""
+    from datetime import date
+
+    v1 = ev("Passwords must be at least 12 characters.", "E1", date(2021, 1, 12))
+    v2 = ev("Passwords must be at least 16 characters.", "E2", date(2024, 3, 3))
+    outcome = validate(
+        {
+            "answer": "",
+            "answer_type": "not_found",
+            "claims": [
+                {"text": "Passwords must be at least 12 characters.", "evidence_ids": ["E1"]},
+                {"text": "Passwords must be at least 16 characters.", "evidence_ids": ["E2"]},
+            ],
+            "evidence_sufficient": False,
+            "conflict_detected": True,
+            "reason": "the evidence conflicts",
+        },
+        [v1, v2],
+        entailment=LexicalEntailment(),
+        question="What is the minimum password length?",
+    )
+    assert outcome.status is AnswerStatus.REVIEW_REQUIRED
+    assert outcome.signals["conflicting_answer_surfaced"] is True
+    assert "12 characters" in outcome.answer and "16 characters" in outcome.answer
+    assert "disagrees" in outcome.reason
+
+
+def test_genuinely_absent_evidence_still_refuses():
+    """The change must not turn every refusal into a review. With one claim
+    from one source there is no conflict to surface."""
+    outcome = validate(
+        {"answer": "", "answer_type": "not_found", "claims": [],
+         "evidence_sufficient": False, "reason": "not addressed"},
+        [ev("Backups run every four hours.")],
+        entailment=LexicalEntailment(),
+    )
+    assert outcome.status is AnswerStatus.REFUSED
+    assert outcome.signals["conflicting_answer_surfaced"] is False
+
+
+def test_one_claim_citing_several_sections_is_agreement_not_conflict():
+    outcome = validate(
+        {"answer": "", "answer_type": "not_found",
+         "claims": [{"text": "Backups run every four hours.", "evidence_ids": ["E1"]}],
+         "evidence_sufficient": False, "reason": "unclear"},
+        [ev("Backups run every four hours.")],
+    )
+    assert outcome.status is AnswerStatus.REFUSED
+
+
+def test_entailment_and_literal_checks_share_one_date_canonicaliser():
+    """The date fix originally landed only in the literal check while the
+    entailment checker kept flagging the same correct answer, so the false
+    positive survived a fix that appeared to work. Duplication was the bug;
+    both now call the same function."""
+    from sqc.core.answering import entailment as entailment_module
+    from sqc.core.answering import validator as validator_module
+    from sqc.core.answering.normalise import canonical_dates
+
+    assert entailment_module.canonical_dates is canonical_dates
+    assert validator_module.canonical_dates is canonical_dates
+
+
+def test_lexical_entailment_matches_a_date_written_in_another_notation():
+    result = LexicalEntailment().check(
+        "Effective Date: 2017-03-31.", "Effective Date: 3/31/2017. Category: Operations."
+    )
+    assert result.label is Entailment.SUPPORTED
+
+
+def test_lexical_entailment_still_catches_the_wrong_date():
+    result = LexicalEntailment().check(
+        "Effective Date: 2019-01-01.", "Effective Date: 3/31/2017. Category: Operations."
+    )
+    assert result.label is Entailment.UNSUPPORTED
+    assert "2019" in result.detail
+
+
+def test_lexical_entailment_flags_a_date_absent_from_the_evidence():
+    """True positive, and the one behind the 5.3% unsupported-claim rate in a
+    real run: retrieval never surfaced the effective date, so a claim
+    asserting it is genuinely unsupported by what was retrieved."""
+    result = LexicalEntailment().check(
+        "Effective Date: 2017-03-31.", "Reviewed annually by the Responsible Officer."
+    )
+    assert result.label is Entailment.UNSUPPORTED

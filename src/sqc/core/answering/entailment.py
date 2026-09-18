@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
+from sqc.core.answering.normalise import canonical_dates
 from sqc.providers.base import LLMProvider, ProviderError
 
 
@@ -114,6 +115,10 @@ class LexicalEntailment:
         self.unsupported_below = unsupported_below
 
     def check(self, claim: str, evidence: str) -> EntailmentResult:
+        # Canonicalise before both checks, not just the salient one. Applying
+        # it to half the comparison left "2017-03-31" and "3/31/2017" sharing
+        # no tokens at all, so coverage scored zero on a correct answer.
+        claim, evidence = canonical_dates(claim), canonical_dates(evidence)
         claim_words = _content_words(claim)
         if len(claim_words) < 3:
             return EntailmentResult(Entailment.UNKNOWN, 0.0, "claim too short to judge")
@@ -124,6 +129,9 @@ class LexicalEntailment:
 
         # A figure or standard named in the claim but absent from the
         # evidence is decisive regardless of overall coverage.
+        # Dates go through the same canonicalisation the literal check uses.
+        # Without it a policy dated 3/31/2017 answered as 2017-03-31 was
+        # reported as a claim the evidence never made.
         claim_salient = {m.lower().replace(" ", "") for m in _SALIENT.findall(claim)}
         evidence_salient = {m.lower().replace(" ", "") for m in _SALIENT.findall(evidence)}
         missing_salient = claim_salient - evidence_salient
