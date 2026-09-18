@@ -499,3 +499,80 @@ def test_lexical_entailment_flags_a_date_absent_from_the_evidence():
         "Effective Date: 2017-03-31.", "Reviewed annually by the Responsible Officer."
     )
     assert result.label is Entailment.UNSUPPORTED
+
+
+# ------------------------------- evidence means what the model was shown
+
+
+def test_metadata_shown_to_the_model_counts_as_evidence():
+    """The prompt renders each item with its source, section and effective
+    date, then its text. Checking the text alone made metadata evidence when
+    prompting and not evidence when validating, so a real run flagged the
+    correct effective date as an unsupported claim."""
+    from datetime import date
+
+    from sqc.core.answering.validator import evidence_as_given
+
+    item = ev("Responsible Department: Information Services.", "E1", date(2017, 3, 31))
+    given = evidence_as_given(item)
+    assert "2017-03-31" in given
+    assert "policy.md" in given
+    assert "Responsible Department" in given
+
+
+def test_an_answer_drawn_from_document_metadata_is_supported():
+    from datetime import date
+
+    item = ev("Responsible Department: Information Services.", "E1", date(2017, 3, 31))
+    outcome = validate(
+        {
+            "answer": "The policy took effect on 2017-03-31.",
+            "answer_type": "yes",
+            "claims": [{"text": "The policy took effect on 2017-03-31.",
+                        "evidence_ids": ["E1"]}],
+            "evidence_sufficient": True,
+            "reason": "stated in the document metadata",
+        },
+        [item],
+        entailment=LexicalEntailment(),
+        question="When did this policy take effect?",
+    )
+    assert outcome.status is AnswerStatus.SUPPORTED
+    assert outcome.signals["claims_unentailed"] == 0
+    assert outcome.signals["unsupported_literals"] == []
+
+
+def test_a_date_in_neither_text_nor_metadata_is_still_flagged():
+    """The widened check must not swallow real fabrications."""
+    item = ev("Backups run every four hours.", "E1", None)
+    outcome = validate(
+        {
+            "answer": "The policy took effect on 2019-01-01.",
+            "answer_type": "yes",
+            "claims": [{"text": "The policy took effect on 2019-01-01.",
+                        "evidence_ids": ["E1"]}],
+            "evidence_sufficient": True, "reason": "stated",
+        },
+        [item],
+        entailment=LexicalEntailment(),
+    )
+    assert outcome.status is AnswerStatus.REVIEW_REQUIRED
+    assert outcome.signals["claims_unentailed"] == 1
+
+
+def test_a_wrong_date_is_flagged_even_when_metadata_carries_a_different_one():
+    from datetime import date
+
+    item = ev("Responsible Department: Information Services.", "E1", date(2017, 3, 31))
+    outcome = validate(
+        {
+            "answer": "The policy took effect on 2024-01-01.",
+            "answer_type": "yes",
+            "claims": [{"text": "The policy took effect on 2024-01-01.",
+                        "evidence_ids": ["E1"]}],
+            "evidence_sufficient": True, "reason": "stated",
+        },
+        [item],
+        entailment=LexicalEntailment(),
+    )
+    assert outcome.status is AnswerStatus.REVIEW_REQUIRED

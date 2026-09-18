@@ -107,6 +107,23 @@ def find_unsupported_literals(answer: str, cited_text: str) -> list[str]:
     return missing
 
 
+def evidence_as_given(item: Evidence) -> str:
+    """Everything about one evidence item that the model was shown.
+
+    The prompt renders each item with its source, section and effective date
+    in the header, then its text. Validating against the text alone made the
+    metadata evidence when prompting and not evidence when checking, so a
+    correct answer drawn from it was reported as unsupported. A real run
+    flagged the right effective date for exactly this reason.
+    """
+    parts = [item.filename, " > ".join(item.heading_path), item.text]
+    if item.page_start is not None:
+        parts.append(f"page {item.page_start}")
+    if item.effective_date is not None:
+        parts.append(f"effective {item.effective_date}")
+    return " ".join(p for p in parts if p)
+
+
 def _as_text(value: Any) -> str:
     """Read a string field, repairing escape sequences the model emitted
     literally.
@@ -286,7 +303,7 @@ def validate(
                 judged.append(claim)
                 continue
             cited = " ".join(
-                by_handle[c.evidence_id].text
+                evidence_as_given(by_handle[c.evidence_id])
                 for c in claim.citations
                 if c.evidence_id in by_handle
             )
@@ -331,7 +348,7 @@ def validate(
         )
 
     cited_text = " ".join(
-        by_handle[c.evidence_id].text
+        evidence_as_given(by_handle[c.evidence_id])
         for claim in supported_claims
         for c in claim.citations
         if c.evidence_id in by_handle
