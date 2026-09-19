@@ -38,6 +38,33 @@ lookup keyed to "cassette" and missed everything just recorded.
     record  -> 12 recorded, 0 replayed
     replay  -> 12 replayed, 0 recorded, 0 provider calls
 
+## Retrieval only
+
+    python -m evals.run --dataset <path> --retrieval-only
+
+Scores the retrieval stage by itself. Retrieval ground truth is `expect_text`
+appearing in the evidence pack, which is a property of retrieval alone - the
+answering model was never part of that check. So this mode builds no LLM
+provider, touches no cassette, needs no API key and spends no quota.
+
+That matters because the cassettes are keyed to the prompt, the prompt
+contains the evidence in retrieved order, and ordering currently tie-breaks on
+`chunks.id`, which is `gen_random_uuid()`. Re-ingesting the same files
+therefore invalidates the cassettes, so measuring a retrieval change through
+the full pipeline costs a fresh recording of every case. Retrieval is the
+thing a retrieval change is supposed to move, and this measures it directly.
+
+It reports retrieval metrics and nothing else. A run that called no model has
+nothing to say about coverage, false answers or hallucination, and printing a
+zero for those would read as a system that answers nothing rather than one
+that was not asked to. Cases with no `expect_text` are counted as skipped, not
+scored as hits.
+
+`--baseline` works here: `check_regression` compares only the metrics present
+on both sides, so a retrieval-only run gates on `retrieval_recall` alone.
+Reports go to `evals/results/latest-retrieval.json` so they cannot overwrite a
+full run's report.
+
 ## Provider failures
 
 Rates are computed only over cases whose model call completed. A run with 17

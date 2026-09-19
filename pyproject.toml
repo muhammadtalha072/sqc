@@ -12,7 +12,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+# reportlab generates the PDFs and DOCX-adjacent fixtures in tests/fixtures.py.
+# Without it, test_chunking, test_ingestion_pipeline and test_parsers cannot be
+# collected at all, so a clean `pip install -e ".[dev]"` could not run the suite.
+dev = ["pytest>=8.0", "ruff>=0.6", "reportlab>=4.0"]
 providers = ["anthropic>=0.40", "voyageai>=0.3"]
 
 [tool.pytest.ini_options]

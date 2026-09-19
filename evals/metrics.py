@@ -13,10 +13,12 @@ regression, whatever the headline number does.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from sqc.core.answering.schema import AnswerResult, AnswerStatus
+from sqc.core.retrieval.types import Evidence
 
 from evals.dataset import EvalCase
 
@@ -76,6 +78,29 @@ def _status_matches(expected: str, actual: AnswerStatus) -> bool:
     return actual.value == expected
 
 
+def check_retrieval(
+    case: EvalCase, evidence: Sequence[Evidence]
+) -> tuple[bool | None, tuple[str, ...]]:
+    """Retrieval ground truth: did every expect_text string reach the evidence?
+
+    Reads the evidence pack and nothing else. It never looks at the model's
+    answer, which is what makes retrieval measurable without calling a model
+    at all - the property the retrieval-only eval mode is built on.
+
+    Returns (hit, missing). A hit of None means the case states no retrieval
+    expectation, which is not the same as a case whose evidence was missed:
+    refusal cases assert nothing about retrieval and must not be averaged in.
+
+    score_case and the retrieval-only runner both call this, so the two can
+    never drift into disagreeing about what a retrieval hit is.
+    """
+    if not case.expect_text:
+        return None, ()
+    blob = " ".join(item.text for item in evidence).lower()
+    missing = tuple(t for t in case.expect_text if t.lower() not in blob)
+    return not missing, missing
+
+
 def score_case(case: EvalCase, result: AnswerResult) -> CaseOutcome:
     """Check one answer against its golden expectations."""
     failures: list[str] = []
@@ -104,13 +129,9 @@ def score_case(case: EvalCase, result: AnswerResult) -> CaseOutcome:
 
     # Retrieval ground truth, checked independently of the answer so a
     # retrieval failure is never reported as an answering failure.
-    retrieval_hit: bool | None = None
-    if case.expect_text:
-        evidence_blob = " ".join(item.text for item in result.evidence).lower()
-        missing = [t for t in case.expect_text if t.lower() not in evidence_blob]
-        retrieval_hit = not missing
-        if missing:
-            failures.append(f"evidence missing: {', '.join(missing)}")
+    retrieval_hit, missing = check_retrieval(case, result.evidence)
+    if missing:
+        failures.append(f"evidence missing: {', '.join(missing)}")
 
     answer_blob = result.answer.lower()
 
@@ -370,3 +391,167 @@ def _summarise_errors(outcomes: list[CaseOutcome]) -> dict[str, int]:
             message = message[:110]
         counts[message] = counts.get(message, 0) + 1
     return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
+
+
+# ------------------------------------------------------------ retrieval only
+#
+# Retrieval is the one stage that can be scored without a model: the ground
+# truth is "did this string reach the evidence pack", which check_retrieval
+# answers from the evidence alone. Measuring it separately costs no API quota
+# and no cassettes, so a retrieval change can be evaluated on its own terms.
+#
+# The rates below deliberately stop at retrieval. A retrieval-only run must
+# never emit coverage, false_answer_rate or hallucination_rate - not even as
+# zeros - because nothing was answered and a zero there would read as a
+# system that answers nothing dangerously well. Same reasoning as the
+# provider-failure exclusion above: a metric must describe what was measured.
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalOutcome:
+    case_id: str
+    question: str
+    category: str
+    hit: bool
+    missing: tuple[str, ...] = ()
+    evidence_items: int = 0
+    candidates: int = 0
+    below_floor: bool = False
+    refusal_reason: str = ""
+    latency_ms: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "case_id": self.case_id,
+            "question": self.question,
+            "category": self.category,
+            "retrieval_hit": self.hit,
+            "missing": list(self.missing),
+            "evidence_items": self.evidence_items,
+            "candidates": self.candidates,
+            "below_floor": self.below_floor,
+            "refusal_reason": self.refusal_reason[:200],
+            "latency_ms": self.latency_ms,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalReport:
+    outcomes: tuple[RetrievalOutcome, ...] = ()
+    dataset: str = ""
+    embedding_model: str = ""
+    rerank_provider: str = ""
+    skipped: int = 0
+    """Cases carrying no expect_text. They assert nothing about retrieval, so
+    they are counted and excluded rather than scored as hits."""
+    metrics: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def passed(self) -> int:
+        return sum(1 for o in self.outcomes if o.hit)
+
+    @property
+    def failed(self) -> int:
+        return len(self.outcomes) - self.passed
+
+
+def compute_retrieval_metrics(outcomes: list[RetrievalOutcome]) -> dict[str, Any]:
+    checked = len(outcomes)
+    hits = sum(1 for o in outcomes if o.hit)
+
+    def ratio(numerator: int, denominator: int) -> float | None:
+        return round(numerator / denominator, 4) if denominator else None
+
+    return {
+        "mode": "retrieval-only",
+        "cases_with_expectations": checked,
+        "passed": hits,
+        "failed": checked - hits,
+        "retrieval_recall": ratio(hits, checked),
+        "retrieval_failure_rate": ratio(checked - hits, checked),
+        "below_floor_cases": sum(1 for o in outcomes if o.below_floor),
+        "mean_evidence_items": (
+            round(sum(o.evidence_items for o in outcomes) / checked, 2) if checked else 0
+        ),
+        "mean_candidates": (
+            round(sum(o.candidates for o in outcomes) / checked, 2) if checked else 0
+        ),
+        "mean_latency_ms": (
+            round(sum(o.latency_ms for o in outcomes) / checked) if checked else 0
+        ),
+        "by_category": {
+            category: {
+                "cases": len([o for o in outcomes if o.category == category]),
+                "passed": len([o for o in outcomes if o.category == category and o.hit]),
+            }
+            for category in sorted({o.category for o in outcomes})
+        },
+    }
+
+
+def format_retrieval_report(report: RetrievalReport) -> str:
+    """Human-readable summary. Misses first, with what was not found."""
+    lines: list[str] = []
+    metrics = report.metrics
+
+    misses = [o for o in report.outcomes if not o.hit]
+    if misses:
+        lines.append(f"RETRIEVAL MISSES ({len(misses)})")
+        for outcome in misses:
+            lines.append(f"  {outcome.case_id}: {outcome.question}")
+            lines.append(f"      - evidence missing: {', '.join(outcome.missing)}")
+            if outcome.below_floor and outcome.refusal_reason:
+                lines.append(f"      - no evidence packed: {outcome.refusal_reason}")
+        lines.append("")
+
+    lines.append(f"dataset      : {report.dataset}")
+    lines.append(
+        f"providers    : embed={report.embedding_model} rerank={report.rerank_provider} "
+        "llm=(not called)"
+    )
+    lines.append("")
+    lines.append(
+        f"  cases scored       {metrics['cases_with_expectations']}"
+        f"   hit {metrics['passed']}   missed {metrics['failed']}"
+    )
+    if report.skipped:
+        lines.append(
+            f"  cases skipped      {report.skipped}"
+            "   state no expect_text - nothing to assert about retrieval"
+        )
+    lines.append("")
+
+    def show(label: str, key: str, note: str = "") -> None:
+        value = metrics.get(key)
+        shown = "n/a" if value is None else f"{value:.1%}" if isinstance(value, float) else value
+        lines.append(f"  {label:<22} {shown:>7}   {note}")
+
+    show("retrieval recall", "retrieval_recall", "expected evidence actually retrieved")
+    show("retrieval failure rate", "retrieval_failure_rate", "expected evidence not found")
+    lines.append(
+        f"  {'below floor':<22} {metrics['below_floor_cases']:>7}"
+        "   nothing cleared the retrieval threshold"
+    )
+    lines.append("")
+
+    categories = metrics.get("by_category") or {}
+    if categories:
+        lines.append("  by category")
+        for category, counts in categories.items():
+            mark = "" if counts["passed"] == counts["cases"] else "   <-"
+            lines.append(f"    {category:<24} {counts['passed']}/{counts['cases']}{mark}")
+        lines.append("")
+
+    lines.append(
+        f"  mean evidence items  {metrics['mean_evidence_items']:>5}"
+        f"   mean candidates {metrics['mean_candidates']}"
+        f"   mean latency {metrics['mean_latency_ms']} ms"
+    )
+    lines.append("")
+    lines.append(
+        "  NOT MEASURED: coverage, false answer rate, refusal precision, "
+        "hallucination rate,\n  citation rate. No model was called, so nothing "
+        "here says whether an answer would\n  be correct. Run without "
+        "--retrieval-only for those."
+    )
+    return "\n".join(lines)
