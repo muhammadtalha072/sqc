@@ -179,3 +179,31 @@ def test_corpus_is_large_enough_for_retrieval_to_fail(corpus):
         f"{MAX_EVIDENCE_SHARE:.0%} retrieval is returning a slice of the corpus "
         "rather than selecting from it"
     )
+
+
+def test_answerable_cases_guard_against_borrowing_another_document(corpus):
+    """Refusal cases were given tempting wrong evidence from the start. The
+    answerable ones were not, and that was a gap.
+
+    A DePaul-scoped question whose answer is taken from Liverpool's policy
+    would have registered only as a missing phrase - the case would fail, but
+    for the wrong reason, and a reader would look at retrieval rather than at
+    an answer built from another organisation's document. forbid_literals
+    naming the other policies' equivalents turns that into what it is.
+
+    Found by inspecting a recorded answer by hand, which is not a control.
+    """
+    _tenant_id, dataset, rows = corpus
+    named = dataset.document
+
+    guarded = {
+        case.id
+        for case in dataset.cases
+        if case.answerable
+        for needle in case.forbid_literals
+        if _documents_containing(rows, needle) - {named}
+    }
+    assert len(guarded) >= 4, (
+        f"only {len(guarded)} answerable case(s) forbid text that actually exists "
+        "elsewhere in the tenant; a borrowed answer would go unrecognised"
+    )

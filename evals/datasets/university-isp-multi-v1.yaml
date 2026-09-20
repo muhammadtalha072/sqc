@@ -99,7 +99,12 @@ cases:
     forbid_literals:
       - "24 hours"
       - "72 hours"
+      - "Servicedesk"
     rationale: >
+      "Servicedesk" is how tus_isp.pdf routes incident reports; DePaul routes
+      them to a named officer and an address. Forbidding it turns a borrowed
+      reporting channel from a silent pass into a failure.
+
       Currently missed by every retriever configuration on this corpus: four
       other universities describe breach reporting in similar language and
       outrank the correct passage. A known failure kept on purpose - a corpus
@@ -118,10 +123,22 @@ cases:
       - "Vice President for Information Services"
     expect_answer_contains:
       - "Vice President for Information Services"
+    forbid_literals:
+      - "Chief Information Officer"
+      - "Chief Information Security Officer"
+      - "Head of Department"
     rationale: >
       Found by dense retrieval and missed by lexical on this corpus, so it
       balances the two lexical-only cases. Every one of the five documents
       names someone accountable, which is exactly why the question is scoped.
+
+      forbid_literals names the officers the other four policies appoint -
+      verified present in ctbor, trinity, liverpool or tus and absent from
+      DePaul's. Without them a borrowed answer would register only as a
+      missing phrase, not as evidence taken from another organisation's
+      document, which is the failure this corpus exists to detect. Note
+      DePaul's own "Chief Information Privacy Official" does not contain any
+      of these as a substring.
 
   - id: depaul-effective-date
     category: document_control
@@ -150,7 +167,13 @@ cases:
       - "discharge/expulsion"
     expect_answer_contains:
       - "disciplinary"
+    forbid_literals:
+      - "Head of Department"
     rationale: >
+      liverpool and tus escalate to a Head of Department; DePaul does not use
+      that role at all, so naming one means the answer came from the wrong
+      document.
+
       "disciplinary action" appears in three other policies, so the expected
       string is the one phrase unique to DePaul. Without that anchor the case
       would pass by retrieving another university's sanctions clause.
@@ -180,7 +203,14 @@ cases:
     expect_status: answered
     expect_text:
       - "Chief Information Privacy Official"
+    forbid_literals:
+      - "Chief Information Security Officer"
+      - "Chief Information Officer"
     rationale: >
+      The two titles ctbor and trinity use are forbidden here: they are the
+      nearest wrong answers in the tenant, and they differ from DePaul's by a
+      single word.
+
       A single exact title appearing once in 164 chunks. Tests whether
       retrieval can find one passage rather than the general neighbourhood of
       a topic.
@@ -206,7 +236,13 @@ cases:
     expect_status: answered
     expect_text:
       - "Office of the General Counsel"
+    forbid_literals:
+      - "Chief Information Security Officer"
     rationale: >
+      ctbor and trinity route legal and security consultation through a CISO
+      rather than a general counsel's office, so that title is the plausible
+      wrong answer here.
+
       A named internal office. Four other policies discuss legal compliance
       without naming this office, so a near-miss is available in the corpus.
 
