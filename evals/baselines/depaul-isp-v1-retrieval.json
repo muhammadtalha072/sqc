@@ -1,0 +1,119 @@
+{
+  "generated_at": "2026-09-20T05:55:27.150681+00:00",
+  "mode": "retrieval-only",
+  "dataset": "depaul-isp-v1 (12 cases)",
+  "model": null,
+  "embedding_model": "fake-hashing-v1",
+  "rerank_provider": "none",
+  "skipped_cases": 6,
+  "metrics": {
+    "mode": "retrieval-only",
+    "cases_with_expectations": 6,
+    "passed": 5,
+    "failed": 1,
+    "retrieval_recall": 0.8333,
+    "retrieval_failure_rate": 0.1667,
+    "below_floor_cases": 0,
+    "mean_evidence_items": 4.0,
+    "mean_candidates": 17.0,
+    "mean_latency_ms": 8,
+    "by_category": {
+      "data_classification": {
+        "cases": 1,
+        "passed": 1
+      },
+      "document_control": {
+        "cases": 1,
+        "passed": 0
+      },
+      "governance": {
+        "cases": 2,
+        "passed": 2
+      },
+      "incident_response": {
+        "cases": 1,
+        "passed": 1
+      },
+      "vendor_management": {
+        "cases": 1,
+        "passed": 1
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "covered-data-definition",
+      "question": "What types of information are treated as covered data?",
+      "category": "data_classification",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 3,
+      "candidates": 17,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 11
+    },
+    {
+      "case_id": "breach-reporting",
+      "question": "How should staff report a suspected data breach?",
+      "category": "incident_response",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 4,
+      "candidates": 17,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 7
+    },
+    {
+      "case_id": "responsible-officer",
+      "question": "Who is responsible for information security at your organisation?",
+      "category": "governance",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 5,
+      "candidates": 17,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 7
+    },
+    {
+      "case_id": "non-compliance",
+      "question": "What happens if someone fails to comply with the policy?",
+      "category": "governance",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 4,
+      "candidates": 17,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 7
+    },
+    {
+      "case_id": "service-providers",
+      "question": "What is required of third-party service providers who access your data?",
+      "category": "vendor_management",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 3,
+      "candidates": 17,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 8
+    },
+    {
+      "case_id": "policy-effective-date",
+      "question": "When did this information security policy take effect?",
+      "category": "document_control",
+      "retrieval_hit": false,
+      "missing": [
+        "3/31/2017"
+      ],
+      "evidence_items": 5,
+      "candidates": 17,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 7
+    }
+  ]
+}

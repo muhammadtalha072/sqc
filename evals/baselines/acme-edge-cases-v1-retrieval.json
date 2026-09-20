@@ -1,0 +1,149 @@
+{
+  "generated_at": "2026-09-20T05:55:27.983867+00:00",
+  "mode": "retrieval-only",
+  "dataset": "acme-edge-cases-v1 (12 cases)",
+  "model": null,
+  "embedding_model": "fake-hashing-v1",
+  "rerank_provider": "none",
+  "skipped_cases": 4,
+  "metrics": {
+    "mode": "retrieval-only",
+    "cases_with_expectations": 8,
+    "passed": 8,
+    "failed": 0,
+    "retrieval_recall": 1.0,
+    "retrieval_failure_rate": 0.0,
+    "below_floor_cases": 0,
+    "mean_evidence_items": 6.0,
+    "mean_candidates": 15.0,
+    "mean_latency_ms": 5,
+    "by_category": {
+      "contradiction": {
+        "cases": 1,
+        "passed": 1
+      },
+      "date_claim": {
+        "cases": 1,
+        "passed": 1
+      },
+      "exception": {
+        "cases": 1,
+        "passed": 1
+      },
+      "numeric_claim": {
+        "cases": 2,
+        "passed": 2
+      },
+      "scope_mismatch": {
+        "cases": 1,
+        "passed": 1
+      },
+      "stale_version": {
+        "cases": 1,
+        "passed": 1
+      },
+      "supported_answer": {
+        "cases": 1,
+        "passed": 1
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "encryption-at-rest-supported",
+      "question": "What algorithm is used to encrypt customer data at rest?",
+      "category": "supported_answer",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 6,
+      "candidates": 15,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 10
+    },
+    {
+      "case_id": "retention-period-supported",
+      "question": "How long are customer records retained after account closure?",
+      "category": "numeric_claim",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 6,
+      "candidates": 15,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 5
+    },
+    {
+      "case_id": "mfa-scope-mismatch",
+      "question": "Is multi-factor authentication required for all accounts without exception?",
+      "category": "scope_mismatch",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 6,
+      "candidates": 15,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 6
+    },
+    {
+      "case_id": "mfa-exception-must-surface",
+      "question": "Do any accounts have an exemption from multi-factor authentication?",
+      "category": "exception",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 6,
+      "candidates": 15,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 4
+    },
+    {
+      "case_id": "mfa-version-conflict",
+      "question": "Which accounts are required to use multi-factor authentication?",
+      "category": "contradiction",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 6,
+      "candidates": 15,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 4
+    },
+    {
+      "case_id": "password-length-stale",
+      "question": "What is the minimum password length?",
+      "category": "stale_version",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 6,
+      "candidates": 15,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 6
+    },
+    {
+      "case_id": "policy-effective-date",
+      "question": "When did the current access control policy take effect?",
+      "category": "date_claim",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 6,
+      "candidates": 15,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 4
+    },
+    {
+      "case_id": "rpo-supported",
+      "question": "What is your recovery point objective for backups?",
+      "category": "numeric_claim",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 6,
+      "candidates": 15,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 4
+    }
+  ]
+}
