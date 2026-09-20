@@ -1,0 +1,169 @@
+{
+  "generated_at": "2026-09-20T06:21:11.369040+00:00",
+  "mode": "retrieval-only",
+  "dataset": "university-isp-multi-v1 (16 cases)",
+  "model": null,
+  "embedding_model": "fake-hashing-v1",
+  "rerank_provider": "none",
+  "skipped_cases": 6,
+  "metrics": {
+    "mode": "retrieval-only",
+    "cases_with_expectations": 10,
+    "passed": 8,
+    "failed": 2,
+    "retrieval_recall": 0.8,
+    "retrieval_failure_rate": 0.2,
+    "below_floor_cases": 0,
+    "mean_evidence_items": 4.1,
+    "mean_candidates": 60.3,
+    "mean_latency_ms": 11,
+    "by_category": {
+      "data_classification": {
+        "cases": 2,
+        "passed": 2
+      },
+      "document_control": {
+        "cases": 1,
+        "passed": 0
+      },
+      "governance": {
+        "cases": 4,
+        "passed": 3
+      },
+      "incident_response": {
+        "cases": 2,
+        "passed": 2
+      },
+      "vendor_management": {
+        "cases": 1,
+        "passed": 1
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "depaul-covered-data",
+      "question": "In DePaul's Information Security Policy, what types of information are treated as covered data?",
+      "category": "data_classification",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 4,
+      "candidates": 64,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 14
+    },
+    {
+      "case_id": "depaul-abuse-mailbox",
+      "question": "In DePaul's Information Security Policy, what email address is used to report potential abuses?",
+      "category": "incident_response",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 4,
+      "candidates": 60,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 11
+    },
+    {
+      "case_id": "depaul-breach-reporting",
+      "question": "In DePaul's Information Security Policy, how should a suspected data breach be reported?",
+      "category": "incident_response",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 4,
+      "candidates": 62,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 11
+    },
+    {
+      "case_id": "depaul-responsible-officer",
+      "question": "In DePaul's Information Security Policy, who is the Responsible Officer for information security?",
+      "category": "governance",
+      "retrieval_hit": false,
+      "missing": [
+        "Vice President for Information Services"
+      ],
+      "evidence_items": 4,
+      "candidates": 56,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 12
+    },
+    {
+      "case_id": "depaul-effective-date",
+      "question": "In DePaul's Information Security Policy, when did the policy take effect?",
+      "category": "document_control",
+      "retrieval_hit": false,
+      "missing": [
+        "3/31/2017"
+      ],
+      "evidence_items": 4,
+      "candidates": 59,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 10
+    },
+    {
+      "case_id": "depaul-non-compliance",
+      "question": "In DePaul's Information Security Policy, what happens to community members who fail to comply?",
+      "category": "governance",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 5,
+      "candidates": 63,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 11
+    },
+    {
+      "case_id": "depaul-service-providers",
+      "question": "In DePaul's Information Security Policy, what is required of service providers given access to covered data?",
+      "category": "vendor_management",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 4,
+      "candidates": 62,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 11
+    },
+    {
+      "case_id": "depaul-privacy-official",
+      "question": "In DePaul's Information Security Policy, what other title does the Responsible Officer hold?",
+      "category": "governance",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 4,
+      "candidates": 56,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 10
+    },
+    {
+      "case_id": "depaul-hazardous-materials",
+      "question": "In DePaul's Information Security Policy, are lists of hazardous materials treated as covered data?",
+      "category": "data_classification",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 4,
+      "candidates": 62,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 11
+    },
+    {
+      "case_id": "depaul-general-counsel",
+      "question": "In DePaul's Information Security Policy, which office is consulted to stay current on information security law?",
+      "category": "governance",
+      "retrieval_hit": true,
+      "missing": [],
+      "evidence_items": 4,
+      "candidates": 59,
+      "below_floor": false,
+      "refusal_reason": "",
+      "latency_ms": 10
+    }
+  ]
+}

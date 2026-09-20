@@ -1,0 +1,309 @@
+name: university-isp-multi-v1
+document: depaul_isp.pdf
+description: >
+  The same DePaul policy as depaul-isp-v1, but scored against a tenant holding
+  five real university information security policies - 164 chunks instead of
+  17. It exists because the single-document corpora cannot measure retrieval.
+
+  With 17 chunks and evidence_top_k of 6, retrieval returns roughly a third of
+  the corpus on every query, so it cannot fail in an interesting way: measured
+  on depaul-isp-v1, vector-only retrieval scores 100% and lexical-only scores
+  100%, which means the ablation has no power to tell a good fusion change
+  from simply deleting a retriever. On this corpus the evidence pack is 3% of
+  the chunks, vector-only falls to 81.8%, lexical-only to 72.7%, and two cases
+  are carried by lexical alone.
+
+  This is a deliberately harder contract than depaul-isp-v1. Its numbers are
+  not comparable to that dataset's and must never be read as a regression
+  against it. Both are kept: the single-document one is the stable baseline,
+  this one is where retrieval changes are judged.
+
+  Every question is scoped to DePaul by name. Without that, "who is
+  responsible for information security" has five defensible answers in this
+  tenant and the ground truth would be ambiguous rather than hard.
+
+  Ground truth was established by substring query against the ingested chunks,
+  not by reading alone and not by asking a model. Every expect_text string
+  below was verified to appear in depaul_isp.pdf and in none of the other four
+  documents, so a case cannot pass by retrieving another university's text.
+  Every forbid_literal was verified to be either absent from all 164 chunks or
+  present only in a document other than DePaul's.
+
+  No expect_sections are asserted. Citation heading paths are an answer-stage
+  property and this file was validated with --retrieval-only, which calls no
+  model; asserting them here would be an unverified claim.
+source: >
+  Five published university information security policies in tests/data/.
+  Third-party PDFs, deliberately not committed, so this dataset is skipped
+  rather than scored on a clean clone.
+
+documents:
+  - tests/data/ctbor_isp.pdf
+  - tests/data/depaul_isp.pdf
+  - tests/data/liverpool_isp.pdf
+  - tests/data/trinity_isp.pdf
+  - tests/data/tus_isp.pdf
+
+cases:
+  # ---------------------------------------------------------- answerable
+  # Retrieval-mode measurements below describe the fake hashing embedder with
+  # no reranker, the configuration these were written against.
+
+  - id: depaul-covered-data
+    category: data_classification
+    question: >
+      In DePaul's Information Security Policy, what types of information are
+      treated as covered data?
+    expect_status: answered
+    expect_text:
+      - "Covered Data"
+      - "Social security numbers"
+    expect_answer_contains:
+      - "social security"
+    forbid_literals:
+      - "SOC 2"
+      - "ISO 27001"
+    rationale: >
+      Carried by lexical retrieval and missed by dense retrieval on this
+      corpus. It is one of the two cases that make "delete the lexical
+      retriever" a measurably wrong change rather than a free win.
+
+  - id: depaul-abuse-mailbox
+    category: incident_response
+    question: >
+      In DePaul's Information Security Policy, what email address is used to
+      report potential abuses?
+    expect_status: answered
+    expect_text:
+      - "abuse@depaul.edu"
+    expect_answer_contains:
+      - "abuse@depaul.edu"
+    forbid_literals:
+      - "security@depaul.edu is used to report abuse"
+    rationale: >
+      The second lexical-load-bearing case. An exact address that dense
+      retrieval blurs into the neighbouring breach-reporting address, which is
+      the failure mode that matters: two similar strings, one correct.
+
+  - id: depaul-breach-reporting
+    category: incident_response
+    question: >
+      In DePaul's Information Security Policy, how should a suspected data
+      breach be reported?
+    expect_status: answered
+    expect_text:
+      - "Director of Information Security"
+      - "security@depaul.edu"
+    expect_answer_contains:
+      - "security@depaul.edu"
+    forbid_literals:
+      - "24 hours"
+      - "72 hours"
+    rationale: >
+      Currently missed by every retriever configuration on this corpus: four
+      other universities describe breach reporting in similar language and
+      outrank the correct passage. A known failure kept on purpose - a corpus
+      where everything passes measures nothing. forbid_literals pins the most
+      likely fabrication, a statutory notification window the policy never
+      states.
+
+  - id: depaul-responsible-officer
+    category: governance
+    question: >
+      In DePaul's Information Security Policy, who is the Responsible Officer
+      for information security?
+    expect_status: answered
+    expect_text:
+      - "Responsible Officer"
+      - "Vice President for Information Services"
+    expect_answer_contains:
+      - "Vice President for Information Services"
+    rationale: >
+      Found by dense retrieval and missed by lexical on this corpus, so it
+      balances the two lexical-only cases. Every one of the five documents
+      names someone accountable, which is exactly why the question is scoped.
+
+  - id: depaul-effective-date
+    category: document_control
+    question: >
+      In DePaul's Information Security Policy, when did the policy take
+      effect?
+    expect_status: answered
+    expect_text:
+      - "3/31/2017"
+    forbid_literals:
+      - "2024"
+      - "2025"
+    rationale: >
+      The same date case that depaul-isp-v1 fails, carried over so the fusion
+      defect it exposes stays measurable on a realistic corpus. Dates are the
+      classic fabrication and four other effective dates now sit in the
+      tenant, so a wrong answer is both plausible and available.
+
+  - id: depaul-non-compliance
+    category: governance
+    question: >
+      In DePaul's Information Security Policy, what happens to community
+      members who fail to comply?
+    expect_status: answered
+    expect_text:
+      - "discharge/expulsion"
+    expect_answer_contains:
+      - "disciplinary"
+    rationale: >
+      "disciplinary action" appears in three other policies, so the expected
+      string is the one phrase unique to DePaul. Without that anchor the case
+      would pass by retrieving another university's sanctions clause.
+
+  - id: depaul-service-providers
+    category: vendor_management
+    question: >
+      In DePaul's Information Security Policy, what is required of service
+      providers given access to covered data?
+    expect_status: answered
+    expect_text:
+      - "Service Providers Having Covered Data Access"
+      - "signed contract"
+    forbid_literals:
+      - "SOC 2"
+      - "penetration test"
+    rationale: >
+      Trinity's policy also uses the phrase "Service Provider", so the defined
+      term and the contract requirement are both asserted. Vendor questions
+      are where a questionnaire answer becomes a contractual claim.
+
+  - id: depaul-privacy-official
+    category: governance
+    question: >
+      In DePaul's Information Security Policy, what other title does the
+      Responsible Officer hold?
+    expect_status: answered
+    expect_text:
+      - "Chief Information Privacy Official"
+    rationale: >
+      A single exact title appearing once in 164 chunks. Tests whether
+      retrieval can find one passage rather than the general neighbourhood of
+      a topic.
+
+  - id: depaul-hazardous-materials
+    category: data_classification
+    question: >
+      In DePaul's Information Security Policy, are lists of hazardous
+      materials treated as covered data?
+    expect_status: answered
+    expect_text:
+      - "hazardous materials"
+    rationale: >
+      An item buried deep in a long definitions list, semantically unrelated
+      to the security vocabulary around it. Precisely what a dense retriever
+      is expected to miss and a lexical one to catch.
+
+  - id: depaul-general-counsel
+    category: governance
+    question: >
+      In DePaul's Information Security Policy, which office is consulted to
+      stay current on information security law?
+    expect_status: answered
+    expect_text:
+      - "Office of the General Counsel"
+    rationale: >
+      A named internal office. Four other policies discuss legal compliance
+      without naming this office, so a near-miss is available in the corpus.
+
+  # ------------------------------------ unanswerable: the wrong-document trap
+  # These are the cases this corpus exists for. The evidence a wrong answer
+  # would need is present in the tenant, but in another organisation's policy.
+  # On a single-document corpus these were trivial: the tempting text did not
+  # exist at all, so refusing was free. Here the system must refuse evidence
+  # it can actually see. Answering any of these from another university's
+  # document is the enterprise failure this product must not have.
+
+  - id: mfa-belongs-to-another-policy
+    category: cross_document
+    question: >
+      In DePaul's Information Security Policy, is multi-factor authentication
+      required for all employees?
+    expect_status: refused
+    forbid_literals:
+      - "multi-factor authentication is required"
+      - "MFA is required"
+    rationale: >
+      DePaul's policy never mentions MFA in any form. Liverpool's does, and it
+      is in the same tenant. Verified by substring: "multi-factor
+      authentication" appears in liverpool_isp.pdf and in no DePaul chunk.
+
+  - id: encryption-belongs-to-another-policy
+    category: cross_document
+    question: >
+      In DePaul's Information Security Policy, what algorithm encrypts covered
+      data at rest?
+    expect_status: refused
+    forbid_literals:
+      - "AES"
+      - "AES-256"
+    rationale: >
+      DePaul states no encryption control. Liverpool's policy contains "AES",
+      so the fabrication a single-document corpus could not tempt is now
+      retrievable. Note "AES" is safe as a literal here but "AWS" is not: it
+      matches inside the word "laws", which DePaul's own text contains.
+
+  - id: soc2-belongs-to-another-policy
+    category: certifications
+    question: >
+      In DePaul's Information Security Policy, is the university SOC 2 Type II
+      certified?
+    expect_status: refused
+    forbid_literals:
+      - "SOC 2"
+      - "Type II"
+      - "certified"
+    rationale: >
+      The highest-risk question in a real questionnaire, and now a genuinely
+      hard one: "SOC 2" appears in tus_isp.pdf. An invented yes here is a
+      contractual misrepresentation, not a bad answer.
+
+  - id: rto-belongs-to-another-policy
+    category: business_continuity
+    question: >
+      In DePaul's Information Security Policy, what is the recovery time
+      objective?
+    expect_status: refused
+    forbid_literals:
+      - "recovery time objective"
+      - "RTO is"
+    rationale: >
+      "recovery time objective" appears in ctbor_isp.pdf and nowhere in
+      DePaul's. Continuity commitments are contractual, so borrowing one from
+      another organisation's document is the expensive kind of wrong.
+
+  # ------------------------------- unanswerable: absent from the whole tenant
+
+  - id: pentest-frequency
+    category: vulnerability_management
+    question: >
+      In DePaul's Information Security Policy, how often is third-party
+      penetration testing performed?
+    expect_status: refused
+    forbid_literals:
+      - "penetration test"
+      - "annually"
+      - "quarterly"
+    rationale: >
+      "penetration test" is absent from all 164 chunks, but "annually" and
+      "quarterly" appear in four other policies, so a plausible cadence is
+      available to borrow even though the control is not.
+
+  - id: subprocessor-list
+    category: vendor_management
+    question: >
+      In DePaul's Information Security Policy, what is the current list of
+      subprocessors?
+    expect_status: refused
+    forbid_literals:
+      - "subprocessor"
+      - "Azure"
+      - "Google Cloud"
+    rationale: >
+      Verified absent from every document in the tenant. The control case for
+      the four traps above: a refusal that should be easy, so that a failure
+      here means something different from a failure on those.
