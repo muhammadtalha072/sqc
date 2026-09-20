@@ -427,3 +427,75 @@ def test_provider_errors_are_summarised_so_the_cause_is_visible():
     text_out = format_report(Report(outcomes=tuple(outcomes), dataset="d", metrics=metrics))
     assert "provider errors" in text_out
     assert "RESOURCE_EXHAUSTED" in text_out
+
+
+# ------------------------- defect 5: an expectation nothing could ever satisfy
+
+
+@pytest.mark.parametrize("path", DATASETS, ids=lambda p: p.stem)
+def test_expect_sections_can_be_satisfied_by_retrieved_evidence(path):
+    """A section expectation is only meaningful if the evidence pack can
+    contain that section.
+
+    The defect this pins: depaul-isp-v1 asked the answer to
+    "Who is responsible for information security?" to cite
+    "C. RESPONSIBLE OFFICER RESPONSIBILITIES", the section listing what the
+    officer must do. The officer's identity - the very string the same case
+    requires in expect_text - is in the front matter under a different
+    heading. The case demanded a citation from a section that does not
+    support its own claim, and passed only while retrieval happened to return
+    both sections. When it stopped doing so the failure was attributed to
+    validation, sending the reader to the validator to debug a golden file.
+
+    Asserted against retrieval rather than against a recorded answer, so it
+    needs no model and no cassette.
+    """
+    dataset = load_dataset(path)
+    cases = [c for c in dataset.cases if c.expect_sections]
+    if not cases:
+        pytest.skip(f"{path.stem} asserts no sections")
+
+    try:
+        paths = resolve_documents(dataset, REPO)
+    except DatasetError as exc:
+        pytest.skip(f"corpus unavailable: {exc}")
+
+    from sqc.config import Settings
+    from sqc.core.ingestion.pipeline import ingest_file
+    from sqc.core.retrieval.pipeline import retrieve
+    from sqc.providers.fake import HashingEmbedder
+
+    settings = Settings(
+        embedding_provider="fake", rerank_provider="none", llm_provider="fake",
+        embedding_dim=1024,
+    )
+    embedder = HashingEmbedder(dimension=settings.embedding_dim)
+    tenant_id = uuid.uuid4()
+    with get_admin_engine().begin() as conn:
+        conn.execute(
+            text("INSERT INTO tenants (id, name) VALUES (:id, :n)"),
+            {"id": tenant_id, "n": f"expect-sections-{path.stem}"},
+        )
+    try:
+        for document in paths:
+            ingest_file(tenant_id=tenant_id, path=str(document), embedder=embedder,
+                        doc_type="policy", replace_existing=True)
+
+        problems = []
+        for case in cases:
+            result = retrieve(tenant_id=tenant_id, question=case.question,
+                              embedder=embedder, reranker=None, settings=settings)
+            offered = " ".join(
+                " > ".join(item.heading_path) for item in result.evidence
+            ).lower()
+            for wanted in case.expect_sections:
+                if wanted.lower() not in offered:
+                    problems.append(
+                        f"{case.id}: expects a citation in {wanted!r}, but no retrieved "
+                        "evidence item is in that section - the case cannot pass however "
+                        "well the model behaves"
+                    )
+        assert not problems, "\n".join(problems)
+    finally:
+        with get_admin_engine().begin() as conn:
+            conn.execute(text("DELETE FROM tenants WHERE id = :id"), {"id": tenant_id})

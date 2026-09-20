@@ -61,7 +61,15 @@ cases:
     expect_answer_contains:
       - "Vice President for Information Services"
     expect_sections:
-      - "RESPONSIBLE OFFICER"
+      - "Responsible Department"
+    note: >
+      expect_sections named "RESPONSIBLE OFFICER" until it was checked against
+      the document. That is the heading of the section listing what the officer
+      must do; the officer's identity - the string expect_text requires - is in
+      the front matter, under "Responsible Department: Information Services".
+      So the case demanded a citation from a section that does not contain the
+      fact it asserts, which is the opposite of what a citation is for. It
+      passed only while retrieval happened to return both sections.
 
   - id: non-compliance
     category: governance
