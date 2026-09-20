@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-20T05:55:27.150681+00:00",
+  "generated_at": "2026-09-20T06:34:12.585554+00:00",
   "mode": "retrieval-only",
   "dataset": "depaul-isp-v1 (12 cases)",
   "model": null,
@@ -9,14 +9,14 @@
   "metrics": {
     "mode": "retrieval-only",
     "cases_with_expectations": 6,
-    "passed": 5,
-    "failed": 1,
-    "retrieval_recall": 0.8333,
-    "retrieval_failure_rate": 0.1667,
+    "passed": 6,
+    "failed": 0,
+    "retrieval_recall": 1.0,
+    "retrieval_failure_rate": 0.0,
     "below_floor_cases": 0,
-    "mean_evidence_items": 4.0,
+    "mean_evidence_items": 3.83,
     "mean_candidates": 17.0,
-    "mean_latency_ms": 8,
+    "mean_latency_ms": 7,
     "by_category": {
       "data_classification": {
         "cases": 1,
@@ -24,7 +24,7 @@
       },
       "document_control": {
         "cases": 1,
-        "passed": 0
+        "passed": 1
       },
       "governance": {
         "cases": 2,
@@ -51,7 +51,7 @@
       "candidates": 17,
       "below_floor": false,
       "refusal_reason": "",
-      "latency_ms": 11
+      "latency_ms": 10
     },
     {
       "case_id": "breach-reporting",
@@ -63,7 +63,7 @@
       "candidates": 17,
       "below_floor": false,
       "refusal_reason": "",
-      "latency_ms": 7
+      "latency_ms": 6
     },
     {
       "case_id": "responsible-officer",
@@ -71,11 +71,11 @@
       "category": "governance",
       "retrieval_hit": true,
       "missing": [],
-      "evidence_items": 5,
+      "evidence_items": 4,
       "candidates": 17,
       "below_floor": false,
       "refusal_reason": "",
-      "latency_ms": 7
+      "latency_ms": 6
     },
     {
       "case_id": "non-compliance",
@@ -99,16 +99,14 @@
       "candidates": 17,
       "below_floor": false,
       "refusal_reason": "",
-      "latency_ms": 8
+      "latency_ms": 7
     },
     {
       "case_id": "policy-effective-date",
       "question": "When did this information security policy take effect?",
       "category": "document_control",
-      "retrieval_hit": false,
-      "missing": [
-        "3/31/2017"
-      ],
+      "retrieval_hit": true,
+      "missing": [],
       "evidence_items": 5,
       "candidates": 17,
       "below_floor": false,
