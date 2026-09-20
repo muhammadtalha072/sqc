@@ -13,6 +13,7 @@ regression, whatever the headline number does.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -373,19 +374,45 @@ def format_report(report: Report) -> str:
     return "\n".join(lines)
 
 
+# Ordered: the most specific signature wins. A replay miss is matched before
+# anything else because its message carries a prompt hash, and a hash is 32
+# hex digits that will sooner or later contain "500" or "429".
+#
+# Numeric codes are matched with word boundaries for the same reason. Without
+# them a cassette miss on prompt 5007885c... was summarised as "500: 7885c8..."
+# and read as a server outage that never happened. A measurement bug is worse
+# than a code bug: the code bug shows up as a failure, this showed up as a
+# confident and wrong diagnosis.
+_ERROR_MARKERS: tuple[tuple[str, str], ...] = (
+    (r"no recorded response", "cassette miss (no model call)"),
+    (r"RESOURCE_EXHAUSTED", "RESOURCE_EXHAUSTED"),
+    (r"quota", "quota"),
+    (r"timeout", "timeout"),
+    (r"\b429\b", "429"),
+    (r"\b503\b", "503"),
+    (r"\b500\b", "500"),
+)
+
+
 def _summarise_errors(outcomes: list[CaseOutcome]) -> dict[str, int]:
     """Group provider errors by their distinguishing text.
 
     Collapsed to a short signature so ten identical 429s read as one line
     with a count, which is what makes a systemic problem obvious rather than
     buried in repetition.
+
+    A replay miss is reported as a cassette miss rather than as an unreachable
+    model, because nothing was called: the run needs re-recording, not a look
+    at the provider's status page.
     """
     counts: dict[str, int] = {}
     for outcome in outcomes:
         message = outcome.provider_error or "unknown provider failure"
-        for marker in ("RESOURCE_EXHAUSTED", "quota", "429", "503", "500", "timeout", "429"):
-            if marker.lower() in message.lower():
-                message = f"{marker}: " + message.split(marker, 1)[-1][:90].strip(" :\"'}")
+        for pattern, label in _ERROR_MARKERS:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                tail = message[match.end() :][:90].strip(" :\"'}")
+                message = f"{label}: {tail}" if tail else label
                 break
         else:
             message = message[:110]

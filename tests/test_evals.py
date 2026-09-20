@@ -332,3 +332,60 @@ def test_recorded_file_is_readable_json(tmp_path):
     stored = json.loads(files[0].read_text())
     assert stored["data"] == {"answer": "x"}
     assert "_prompt_preview" in stored, "a human reading a diff needs to see the prompt"
+
+
+# ------------------------------------------------- provider error summarising
+
+
+def test_a_cassette_miss_is_not_reported_as_a_server_error():
+    """A prompt hash is 32 hex digits, so it will sooner or later contain
+    "500" or "429". Matching those as bare substrings turned a replay miss on
+    prompt 5007885c... into "500: 7885c8...", which reads as a provider
+    outage that never happened and sends the reader to a status page."""
+    from evals.metrics import _summarise_errors
+
+    miss = (
+        "the answering model could not be reached: no recorded response for this "
+        "prompt (5007885c864e2496c8803b4dd64a6588). Re-run with --record to capture it."
+    )
+    outcome = score_case(
+        case(expect_status="answered", expect_text=("x",)),
+        result(failure_stage="provider", reason=miss),
+    )
+    summary = _summarise_errors([outcome])
+
+    assert len(summary) == 1
+    label = next(iter(summary))
+    assert label.startswith("cassette miss"), label
+    assert not label.startswith("500"), "a prompt hash was read as an HTTP status"
+
+
+def test_a_real_server_error_is_still_recognised():
+    from evals.metrics import _summarise_errors
+
+    for text_value, expected in (
+        ("provider returned 500 Internal Server Error", "500"),
+        ("provider returned 503 overloaded", "503"),
+        ("rate limited: 429 too many requests", "429"),
+        ("quota exhausted: RESOURCE_EXHAUSTED daily limit", "RESOURCE_EXHAUSTED"),
+    ):
+        outcome = score_case(
+            case(expect_status="answered", expect_text=("x",)),
+            result(failure_stage="provider", reason=text_value),
+        )
+        label = next(iter(_summarise_errors([outcome])))
+        assert label.startswith(expected), f"{text_value!r} summarised as {label!r}"
+
+
+def test_identical_errors_still_collapse_to_one_line():
+    from evals.metrics import _summarise_errors
+
+    outcomes = [
+        score_case(
+            case(id=f"c{i}", expect_status="answered", expect_text=("x",)),
+            result(failure_stage="provider", reason="quota exhausted: RESOURCE_EXHAUSTED"),
+        )
+        for i in range(3)
+    ]
+    summary = _summarise_errors(outcomes)
+    assert len(summary) == 1 and next(iter(summary.values())) == 3
