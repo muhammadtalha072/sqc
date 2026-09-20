@@ -65,6 +65,23 @@ on both sides, so a retrieval-only run gates on `retrieval_recall` alone.
 Reports go to `evals/results/latest-retrieval.json` so they cannot overwrite a
 full run's report.
 
+## Where baselines live
+
+Baselines go in `evals/baselines/` and are committed. `evals/results/` is
+gitignored, so a baseline written there can never be checked in - and a
+baseline that is not checked in does not gate anything. On a fresh checkout
+the runner would find no file, print "treating this run as the baseline",
+write it and exit 0, silently adopting a regression as the new contract. A
+comparison that always passes is worse than no comparison, because it reads
+as protection.
+
+    evals/baselines/acme-edge-cases-v1-retrieval.json
+    evals/baselines/depaul-isp-v1-retrieval.json
+
+`evals/results/` is for the transient `latest*.json` a run always writes.
+Baselines are the opposite kind of artefact: they are the contract a change
+is judged against, so they belong in version control.
+
 ## Provider failures
 
 Rates are computed only over cases whose model call completed. A run with 17

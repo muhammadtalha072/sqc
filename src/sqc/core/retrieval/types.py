@@ -19,6 +19,12 @@ class Candidate:
 
     chunk_id: uuid.UUID
     document_id: uuid.UUID
+    chunk_index: int
+    """Position of this chunk within its document. Carried so that ordering
+    can tie-break on (document_id, chunk_index), which is stable for a given
+    ingest, rather than on chunk_id, which is a fresh random UUID every time
+    a document is ingested. Unique together by schema constraint
+    (chunks_doc_index_uq), so the pair is a total order with no ambiguity."""
     filename: str
     text: str
     parent_text: str

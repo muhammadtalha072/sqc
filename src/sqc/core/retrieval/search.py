@@ -17,24 +17,48 @@ from sqc.core.retrieval.query import build_tsquery
 from sqc.core.retrieval.types import Candidate
 
 _SELECT_COLUMNS = """
-    c.id, c.document_id, d.filename, c.text, c.parent_text, c.heading_path,
-    c.section, c.page_start, c.page_end, d.effective_date, c.injection_flags
+    c.id, c.document_id, c.chunk_index, d.filename, c.text, c.parent_text,
+    c.heading_path, c.section, c.page_start, c.page_end, d.effective_date,
+    c.injection_flags
 """
+
+_SCORE = 12
+"""Index of the score column, which every query appends after the shared
+columns above. Named so that adding a column moves one constant rather than
+silently shifting what the callers read as a relevance score."""
+
+_ORDER_TIE_BREAK = "c.document_id, c.chunk_index"
+"""Tie-break for equal scores.
+
+Not c.id: chunk ids are gen_random_uuid(), so two ingests of the same bytes
+produced different orders among tied rows, which changed the evidence pack,
+which changed the prompt, which orphaned every recorded cassette. Ties are
+common here - the hashing embedder returns exactly equal cosine similarity
+for many chunks, and a query made of document-title words scores nearly flat
+across a whole document.
+
+(document_id, chunk_index) is unique by schema constraint, so this is a total
+order. document_id is itself regenerated per ingest, so this makes ordering
+deterministic within a database state and across re-ingests of a
+single-document corpus; ties that span two documents can still swap when the
+documents are re-ingested. Fixing that would mean ordering on something
+content-derived, which is a larger change than this one."""
 
 
 def _row_to_candidate(row, *, lexical: float | None, vector: float | None) -> Candidate:  # noqa: ANN001
     return Candidate(
         chunk_id=row[0],
         document_id=row[1],
-        filename=row[2],
-        text=row[3],
-        parent_text=row[4] or row[3],
-        heading_path=tuple(row[5] or ()),
-        section=row[6],
-        page_start=row[7],
-        page_end=row[8],
-        effective_date=row[9],
-        injection_flags=tuple(row[10] or ()),
+        chunk_index=row[2],
+        filename=row[3],
+        text=row[4],
+        parent_text=row[5] or row[4],
+        heading_path=tuple(row[6] or ()),
+        section=row[7],
+        page_start=row[8],
+        page_end=row[9],
+        effective_date=row[10],
+        injection_flags=tuple(row[11] or ()),
         lexical_score=lexical,
         vector_score=vector,
     )
@@ -65,14 +89,14 @@ def lexical_search(
         CROSS JOIN to_tsquery('english', :tsquery) AS query
         WHERE c.tsv @@ query
           {"AND c.document_id = ANY(:document_ids)" if document_ids else ""}
-        ORDER BY score DESC, c.id
+        ORDER BY score DESC, {_ORDER_TIE_BREAK}
         LIMIT :limit
     """
     params: dict = {"tsquery": tsquery, "limit": limit}
     if document_ids:
         params["document_ids"] = document_ids
     rows = session.execute(text(sql), params).all()
-    return [_row_to_candidate(row, lexical=float(row[11]), vector=None) for row in rows]
+    return [_row_to_candidate(row, lexical=float(row[_SCORE]), vector=None) for row in rows]
 
 
 def vector_search(
@@ -94,14 +118,14 @@ def vector_search(
         JOIN documents d ON d.id = c.document_id
         WHERE c.embedding IS NOT NULL
           {"AND c.document_id = ANY(:document_ids)" if document_ids else ""}
-        ORDER BY c.embedding <=> CAST(:qv AS vector), c.id
+        ORDER BY c.embedding <=> CAST(:qv AS vector), {_ORDER_TIE_BREAK}
         LIMIT :limit
     """
     params: dict = {"qv": query_vector, "limit": limit}
     if document_ids:
         params["document_ids"] = document_ids
     rows = session.execute(text(sql), params).all()
-    return [_row_to_candidate(row, lexical=None, vector=float(row[11])) for row in rows]
+    return [_row_to_candidate(row, lexical=None, vector=float(row[_SCORE])) for row in rows]
 
 
 def reciprocal_rank_fusion(
@@ -128,7 +152,14 @@ def reciprocal_rank_fusion(
             scores[key] = scores.get(key, 0.0) + 1.0 / (k + position)
             merged[key] = _merge(merged.get(key), candidate, position)
 
-    ordered = sorted(merged.values(), key=lambda c: (-scores[c.chunk_id], str(c.chunk_id)))
+    # Tie-break matches the SQL: (document_id, chunk_index), never chunk_id.
+    # Fusion scores collide constantly - 1/(k+rank) is the same value for any
+    # two chunks holding the same rank in their one retriever - so this sort
+    # decides real evidence order, not a rare edge case.
+    ordered = sorted(
+        merged.values(),
+        key=lambda c: (-scores[c.chunk_id], str(c.document_id), c.chunk_index),
+    )
     return [
         Candidate(**{**_fields(c), "fusion_score": round(scores[c.chunk_id], 8)})
         for c in ordered

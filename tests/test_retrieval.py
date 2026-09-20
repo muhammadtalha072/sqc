@@ -147,6 +147,7 @@ def _candidate(seed: int, lexical=None, vector=None) -> Candidate:  # noqa: ANN0
     return Candidate(
         chunk_id=uuid.UUID(int=seed),
         document_id=uuid.UUID(int=0),
+        chunk_index=seed,
         filename="f.md",
         text=f"chunk {seed}",
         parent_text=f"chunk {seed}",

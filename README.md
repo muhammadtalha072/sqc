@@ -20,7 +20,7 @@ python scripts/eval_setup.py                      # one isolated tenant per data
 python -m evals.run --dataset evals/datasets/acme-edge-cases-v1.yaml
 python -m evals.run --dataset evals/datasets/depaul-isp-v1.yaml
 python -m evals.run --dataset <path> --replay     # free, offline, zero API calls
-python -m evals.run --dataset <path> --baseline evals/results/baseline.json
+python -m evals.run --dataset <path> --baseline evals/baselines/<dataset>.json
 ```
 Responses are cached per prompt hash, so the first run costs API calls and
 every rerun is free. Editing a prompt misses the cache by design, so a prompt
