@@ -59,7 +59,28 @@ class Settings(BaseSettings):
     # retrieval
     candidates_per_retriever: int = Field(default=40, ge=1, le=200)
     evidence_top_k: int = Field(default=6, ge=1, le=50)
-    rrf_k: int = Field(default=60, ge=1)
+    # RRF's k is not a free constant: it sets how much a rank difference is
+    # worth relative to being found by a second retriever, and it only makes
+    # sense against candidates_per_retriever.
+    #
+    # At the original k=60 with a depth of 40, the best a chunk can score from
+    # one retriever is 1/61 = 0.0164, while the worst two retrievers can give
+    # it is 2/100 = 0.0200. So *any* chunk both retrievers found outranked
+    # *every* chunk only one found, whatever the ranks: fusion had degenerated
+    # into counting retrievers, with rank as a tiebreak. Measured consequence -
+    # the chunk holding DePaul's effective date and responsible officer sat at
+    # dense rank 4 and was fused to rank 26, outside an evidence_top_k of 6.
+    #
+    # At k=10 a solo rank-1 (0.0909) beats a two-retriever rank-40 (0.0400)
+    # but still loses to a two-retriever rank-3 (0.1538), so agreement is
+    # rewarded without being decisive. Measured across three corpora: depaul
+    # 83.3% -> 100%, multi-document 80% and acme 100% both unchanged, no case
+    # regressing anywhere.
+    #
+    # Calibrated against the deterministic hashing embedder. The degeneracy
+    # above is arithmetic and holds for any pair of retrievers, but this exact
+    # value must be re-measured when real embeddings replace the fake.
+    rrf_k: int = Field(default=10, ge=1)
 
     # Refusal thresholds. 0.0 disables the retrieval floor, which is the
     # deliberate default: rerank scores are not comparable across providers,

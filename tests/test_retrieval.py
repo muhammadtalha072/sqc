@@ -576,3 +576,58 @@ def test_reranking_defaults_to_none_not_fake():
     from sqc.config import Settings
 
     assert Settings().rerank_provider == "none"
+
+
+# ------------------------------------------------- fusion must still use rank
+
+
+def test_shipped_k_does_not_let_agreement_override_rank():
+    """RRF's k only means something relative to how many candidates each
+    retriever returns.
+
+    At the original k=60 with a depth of 40 the arithmetic degenerated: the
+    best a chunk could score from one retriever was 1/61 = 0.0164, the worst
+    two could give it was 2/100 = 0.0200, so every chunk found by both
+    outranked every chunk found by one, whatever the ranks. Fusion had stopped
+    reading rank and was counting retrievers.
+
+    Asserted against the shipped settings rather than a literal, so raising
+    candidates_per_retriever without revisiting k fails here instead of
+    silently turning fusion back into a vote count.
+    """
+    settings = Settings()
+    depth = settings.candidates_per_retriever
+    best_alone = 1 / (settings.rrf_k + 1)
+    worst_together = 2 / (settings.rrf_k + depth)
+
+    assert best_alone > worst_together, (
+        f"k={settings.rrf_k} with depth={depth}: a chunk ranked first by one "
+        f"retriever scores {best_alone:.4f} and cannot beat {worst_together:.4f}, "
+        "the worst score two retrievers can produce. Rank no longer matters."
+    )
+
+
+def test_a_strong_single_retriever_hit_beats_a_weak_agreement():
+    """The failure this configuration caused, in miniature.
+
+    A chunk ranked first by one retriever and missed by the other must beat a
+    chunk both retrievers ranked last. At k=60 with a depth of 40 it did not,
+    which is how a chunk sitting at dense rank 4 fused to rank 26 and fell
+    outside the evidence pack.
+    """
+    settings = Settings()
+    depth = settings.candidates_per_retriever
+
+    solo = _candidate(9999, vector=0.9)
+    tail = _candidate(8888, lexical=0.1, vector=0.1)
+    fillers = [_candidate(i, lexical=1.0) for i in range(depth - 1)]
+
+    lexical_list = fillers + [tail]
+    vector_list = [solo] + fillers[: depth - 2] + [tail]
+
+    fused = reciprocal_rank_fusion([lexical_list, vector_list], k=settings.rrf_k)
+    order = [c.chunk_id for c in fused]
+    assert order.index(uuid.UUID(int=9999)) < order.index(uuid.UUID(int=8888)), (
+        f"at k={settings.rrf_k} a chunk ranked first by one retriever still loses to "
+        "one both retrievers ranked last; fusion is counting retrievers, not reading rank"
+    )
