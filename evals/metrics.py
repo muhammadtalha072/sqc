@@ -411,14 +411,20 @@ def format_report(report: Report) -> str:
 # and read as a server outage that never happened. A measurement bug is worse
 # than a code bug: the code bug shows up as a failure, this showed up as a
 # confident and wrong diagnosis.
-_ERROR_MARKERS: tuple[tuple[str, str], ...] = (
-    (r"no recorded response", "cassette miss (no model call)"),
-    (r"RESOURCE_EXHAUSTED", "RESOURCE_EXHAUSTED"),
-    (r"quota", "quota"),
-    (r"timeout", "timeout"),
-    (r"\b429\b", "429"),
-    (r"\b503\b", "503"),
-    (r"\b500\b", "500"),
+#
+# The third element says whether the text after the marker distinguishes one
+# failure from another. For a cassette miss it does not: the tail is a prompt
+# hash, unique per case, so keeping it produced five lines saying the same
+# thing where one line with a count was the point. The per-case failures above
+# the summary already carry each hash for anyone re-recording.
+_ERROR_MARKERS: tuple[tuple[str, str, bool], ...] = (
+    (r"no recorded response", "cassette miss (no model call)", False),
+    (r"RESOURCE_EXHAUSTED", "RESOURCE_EXHAUSTED", True),
+    (r"quota", "quota", True),
+    (r"timeout", "timeout", True),
+    (r"\b429\b", "429", True),
+    (r"\b503\b", "503", True),
+    (r"\b500\b", "500", True),
 )
 
 
@@ -439,10 +445,10 @@ def _summarise_errors(outcomes: list[CaseOutcome]) -> dict[str, int]:
         # printed JSON, so a quota failure summarised into four lines of
         # braces - which is what a signature exists to avoid.
         message = " ".join((outcome.provider_error or "unknown provider failure").split())
-        for pattern, label in _ERROR_MARKERS:
+        for pattern, label, keep_tail in _ERROR_MARKERS:
             match = re.search(pattern, message, re.IGNORECASE)
             if match:
-                tail = message[match.end() :][:90].strip(" :\"'{}[],")
+                tail = message[match.end() :][:90].strip(" :\"'{}[],") if keep_tail else ""
                 message = f"{label}: {tail}" if tail else label
                 break
         else:

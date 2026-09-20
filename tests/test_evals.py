@@ -469,3 +469,28 @@ def test_the_gate_blocks_more_answers_without_evidence():
         {"answered_without_evidence_rate": 0.00},
     )
     assert any("answered_without_evidence_rate" in p for p in problems)
+
+
+def test_cassette_misses_collapse_to_one_line():
+    """Each miss carries a different prompt hash, so keeping the text after
+    the marker produced five lines saying the same thing - in a summary whose
+    purpose is collapsing repetition. The hashes are already in the per-case
+    failures, which is where someone re-recording reads them."""
+    from evals.metrics import _summarise_errors
+
+    outcomes = [
+        score_case(
+            case(id=f"c{i}", expect_status="answered", expect_text=("x",)),
+            result(
+                failure_stage="provider",
+                reason=(
+                    "the answering model could not be reached: no recorded response "
+                    f"for this prompt ({i:032x}). Re-run with --record to capture it."
+                ),
+            ),
+        )
+        for i in range(5)
+    ]
+    summary = _summarise_errors(outcomes)
+
+    assert summary == {"cassette miss (no model call)": 5}, summary
