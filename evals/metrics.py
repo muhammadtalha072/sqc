@@ -243,6 +243,29 @@ def compute_metrics(outcomes: list[CaseOutcome], cases: list[EvalCase]) -> dict[
 
     retrieval_checked = [o for o in scored if o.retrieval_hit is not None]
 
+    # The charter asks for an "unsupported-answer rate" and there was none.
+    # An answerable case whose expected evidence never reached the model, and
+    # which the model answered anyway, is exactly that: an answer produced
+    # without the evidence the answer needed.
+    #
+    # Nothing else reports it. coverage counts it as answered, hallucination
+    # misses it because every claim is grounded in whatever adjacent text did
+    # arrive, and false_answer_rate only covers unanswerable cases. A real run
+    # showed "coverage 100%, hallucination 0%" for an answer that identified
+    # DePaul's Responsible Officer as "the Chief Information Privacy Official"
+    # - grounded, cited, and not what was asked, because the chunk naming the
+    # post was never retrieved. The model set evidence_sufficient itself.
+    #
+    # Counted over answerable cases that state a retrieval expectation, since
+    # only those can be judged this way.
+    answerable_checked = [
+        o for o in retrieval_checked if by_id[o.case_id].answerable
+    ]
+    answered_without_evidence = [
+        o for o in answerable_checked
+        if not o.retrieval_hit and o.actual in ("supported", "review_required")
+    ]
+
     def ratio(numerator: int, denominator: int) -> float | None:
         return round(numerator / denominator, 4) if denominator else None
 
@@ -268,6 +291,9 @@ def compute_metrics(outcomes: list[CaseOutcome], cases: list[EvalCase]) -> dict[
         ),
         "retrieval_failure_rate": ratio(
             len([o for o in retrieval_checked if not o.retrieval_hit]), len(retrieval_checked)
+        ),
+        "answered_without_evidence_rate": ratio(
+            len(answered_without_evidence), len(answerable_checked)
         ),
         "unsupported_claim_rate": ratio(
             sum(o.claims_unentailed for o in scored),
@@ -341,6 +367,8 @@ def format_report(report: Report) -> str:
     show("citation rate", "citation_rate", "answers carrying at least one citation")
     show("review required rate", "review_required_rate", "sent to a human")
     show("retrieval failure rate", "retrieval_failure_rate", "expected evidence not found")
+    show("answered w/o evidence", "answered_without_evidence_rate",
+         "expected evidence absent, answered anyway - DANGEROUS")
     show("unsupported claim rate", "unsupported_claim_rate", "claims the evidence does not support")
     lines.append("")
 

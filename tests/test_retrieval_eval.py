@@ -136,6 +136,7 @@ def test_retrieval_metrics_omit_every_answer_quality_rate():
         "citation_rate",
         "review_required_rate",
         "unsupported_claim_rate",
+        "answered_without_evidence_rate",
     ):
         assert forbidden not in metrics, f"retrieval-only must not report {forbidden}"
 

@@ -411,3 +411,61 @@ def test_an_error_signature_is_always_one_line():
     assert "\n" not in label, f"signature spans lines: {label!r}"
     assert label.startswith("quota"), label
     assert len(label) <= 120
+
+
+# --------------------------------- answering without the evidence it needed
+
+
+def test_answering_without_the_expected_evidence_is_counted():
+    """The gap a real run exposed. An answerable case whose expected evidence
+    never reached the model, answered anyway, showed as coverage 100% and
+    hallucination 0% - because the claims were grounded in whatever adjacent
+    text did arrive. The answer identified DePaul's Responsible Officer as
+    "the Chief Information Privacy Official": cited, supported, and not what
+    was asked, because the chunk naming the post was never retrieved."""
+    cases = [
+        case(id="got-evidence", expect_status="answered", expect_text=("x",)),
+        case(id="no-evidence", expect_status="answered", expect_text=("missing",)),
+    ]
+    outcomes = [
+        score_case(cases[0], result(answer="x", evidence=(evidence("x"),),
+                                    citations=(citation(),))),
+        # answered, grounded in what arrived, but the required evidence is absent
+        score_case(cases[1], result(answer="something adjacent",
+                                    evidence=(evidence("unrelated text"),),
+                                    citations=(citation(),))),
+    ]
+    metrics = compute_metrics(outcomes, cases)
+
+    assert metrics["answered_without_evidence_rate"] == 0.5
+    assert metrics["coverage"] == 1.0, "coverage alone calls this a success"
+    assert metrics["hallucination_rate"] == 0.0, "the claims were grounded"
+
+
+def test_refusing_when_the_evidence_is_absent_is_not_counted():
+    """Refusing is the correct response to missing evidence and must not be
+    penalised by this metric, or it would reward answering anyway."""
+    cases = [case(id="no-evidence", expect_status="answered", expect_text=("missing",))]
+    outcomes = [
+        score_case(cases[0], result(status=AnswerStatus.REFUSED, answer="",
+                                    evidence=(evidence("unrelated"),)))
+    ]
+    metrics = compute_metrics(outcomes, cases)
+    assert metrics["answered_without_evidence_rate"] == 0.0
+
+
+def test_refusal_cases_are_excluded_from_the_rate():
+    """A refusal case states no retrieval expectation, so it can say nothing
+    about whether an answer had its evidence."""
+    cases = [case(id="r1", expect_status="refused", expect_text=())]
+    outcomes = [score_case(cases[0], result(status=AnswerStatus.REFUSED, answer=""))]
+    metrics = compute_metrics(outcomes, cases)
+    assert metrics["answered_without_evidence_rate"] is None
+
+
+def test_the_gate_blocks_more_answers_without_evidence():
+    problems = check_regression(
+        {"answered_without_evidence_rate": 0.20},
+        {"answered_without_evidence_rate": 0.00},
+    )
+    assert any("answered_without_evidence_rate" in p for p in problems)

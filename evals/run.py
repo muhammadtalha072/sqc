@@ -97,6 +97,11 @@ RESULTS_DIR = "evals/results"
 REGRESSION_GATES = {
     "false_answer_rate": 0.0,
     "hallucination_rate": 0.0,
+    # An answerable case whose expected evidence never arrived, answered
+    # anyway. Gated with the other two that matter because nothing else
+    # reports it: coverage counts it as answered, and hallucination misses it,
+    # since the claims are grounded in whatever adjacent text did arrive.
+    "answered_without_evidence_rate": 0.0,
     "false_refusal_rate": 0.05,
 }
 
