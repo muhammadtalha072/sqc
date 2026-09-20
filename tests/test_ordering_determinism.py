@@ -12,11 +12,19 @@ cosine similarity for many chunks, and RRF assigns 1/(k+rank), which is the
 same value for any two chunks holding the same rank in their one retriever.
 The tie-break therefore decides real evidence order most of the time.
 
-What the fix does and does not buy is asserted below rather than assumed:
-it makes ordering total and deterministic for a given database state, and
-across re-ingests of a single-document corpus. It does not make a
-multi-document corpus stable across re-ingests, because `documents.id` is
-itself regenerated per ingest.
+The first fix tie-broke on (document_id, chunk_index). That left
+single-document corpora stable but not multi-document ones, because
+`documents.id` is regenerated per ingest too - and that was not cosmetic.
+Measured on the four-document corpus, 2 of 12 recorded cassettes replayed on
+one machine against 4 on another, while the single-document corpus reached 7
+of 12 on both. Every mismatch re-recorded a prompt that had not changed,
+spent model quota, and produced an eval failure that looked like a regression
+and was not.
+
+The tie-break is now (filename, content_sha256, chunk_index) in SQL and
+(filename, chunk_index) in fusion. Every key survives a re-ingest, so the
+tests below assert reproducibility across ingests for both corpus shapes
+rather than only the single-document one.
 """
 
 from __future__ import annotations
@@ -294,43 +302,145 @@ def test_fusion_order_is_independent_of_input_chunk_ids():
     assert first == second
 
 
-# --------------------------------------------- the limit of what this fix buys
+# ------------------------------------------- multi-document reproducibility
 
 
-def test_cross_document_ties_still_depend_on_a_random_document_id(embedder):
-    """Honest boundary. `documents.id` is gen_random_uuid(), so a tie spanning
-    two documents orders by a value that is regenerated on every ingest.
+def test_cross_document_ties_order_by_filename_not_a_random_id():
+    """Two chunks from different documents with identical scores.
 
-    This is not asserted as instability - a given pair of random ids may sort
-    either way - but as the mechanism: swapping only the document ids, with
-    identical scores and chunk indices, changes the order. Measured on the
-    multi-document eval corpus, 11 of 12 prompt keys still moved across two
-    ingests after this fix, while the single-document corpus went to 0 of 12.
-
-    Fixing it means ordering on something content-derived rather than on an
-    id, which is a larger change and is not part of Step 8b.
+    The filenames and the document ids are put in OPPOSITE order on purpose:
+    document_id says b-then-a, filename says a-then-b. An ordering that still
+    read document_id reverses this, so the test fails against the previous
+    tie-break rather than passing under both.
     """
-    low, high = uuid.UUID(int=1), uuid.UUID(int=2)
-    pair = [
-        _candidate(document=2, index=0, chunk_id=10, lexical_score=1.0),
-        _candidate(document=1, index=0, chunk_id=11, lexical_score=1.0),
-    ]
+    a_file = _candidate(document=2, index=0, chunk_id=10,
+                        filename="a.md", lexical_score=1.0)
+    b_file = _candidate(document=1, index=0, chunk_id=11,
+                        filename="b.md", lexical_score=1.0)
+    pair = [a_file, b_file]
+
     fused = reciprocal_rank_fusion([pair, list(reversed(pair))], k=60)
-    top_two = [c.document_id for c in fused[:2]]
-    assert set(top_two) == {low, high}
-    assert top_two == sorted(top_two, key=str), (
-        "ordering should follow document_id, which is exactly why a re-ingest "
-        "can reorder chunks that belong to different documents"
+    assert fused[0].fusion_score == fused[1].fusion_score, "fixture did not produce a tie"
+    assert [c.filename for c in fused[:2]] == ["a.md", "b.md"], (
+        f"cross-document tie ordered {[c.filename for c in fused[:2]]}; "
+        "document_id, not filename, is still deciding"
     )
 
 
-def test_multi_document_ordering_is_stable_within_one_ingest(embedder):
-    """The multi-document case is not stable across ingests, but it must still
-    be stable for a given database state, or nothing is reproducible at all."""
-    tenant_id = _new_tenant("order-multi")
+# Two documents that deliberately share an identical chunk. The bytes differ,
+# so both can live in one tenant despite the unique constraint on
+# content_sha256, but the shared section produces identical text, identical
+# heading path and therefore identical scores in both retrievers - a
+# guaranteed cross-document tie, which is the only thing this ordering
+# decides.
+SHARED_A = b"""# Shared Policy
+
+## Authentication
+
+Multi-factor authentication is required for all employee accounts.
+"""
+
+SHARED_B = b"""# Shared Policy
+
+## Authentication
+
+Multi-factor authentication is required for all employee accounts.
+
+## Appendix
+
+This trailing section exists only to change the file's hash.
+"""
+
+
+def _identified(result) -> list[tuple[str, str]]:  # noqa: ANN001
+    """(filename, text) pairs. The shared chunk has identical text in both
+    documents, so text alone could not show that the two had swapped."""
+    return [(e.filename, e.text) for e in result.evidence]
+
+
+def test_a_guaranteed_cross_document_tie_orders_by_filename(embedder):
+    """The multi-document case the previous tie-break did not cover, built so
+    the tie is certain rather than incidental."""
+    settings = make_settings()
+    for attempt in range(4):
+        tenant_id = _new_tenant(f"order-shared-{attempt}")
+        try:
+            ingest_bytes(tenant_id=tenant_id, raw=SHARED_A,
+                         filename="alpha.md", embedder=embedder)
+            ingest_bytes(tenant_id=tenant_id, raw=SHARED_B,
+                         filename="beta.md", embedder=embedder)
+            result = retrieve(tenant_id=tenant_id, question="What is required for authentication?",
+                              embedder=embedder, reranker=None, settings=settings)
+            shared = [f for f, _ in _identified(result)
+                      if f in ("alpha.md", "beta.md")]
+            assert shared, "fixture retrieved neither document"
+            first_positions = [shared.index(n) for n in ("alpha.md", "beta.md") if n in shared]
+            if len(first_positions) == 2:
+                assert first_positions[0] < first_positions[1], (
+                    f"ingest {attempt}: beta.md came before alpha.md; a random "
+                    "document id is still deciding cross-document ties"
+                )
+        finally:
+            _drop(tenant_id)
+
+
+@pytest.fixture(scope="module")
+def multi_doc_twice(embedder):  # noqa: ANN001
+    """A four-document corpus ingested into two separate tenants.
+
+    The shape that used to be unreproducible: ties spanning documents, with
+    every document id regenerated between the two ingests.
+    """
+    first, second = _new_tenant("order-multi-1"), _new_tenant("order-multi-2")
+    files = {
+        "a-access.md": DOC_A,
+        "b-data.md": DOC_B,
+        "c-isp.md": SINGLE_DOC,
+        "d-copy.md": DOC_A.replace(b"Acme Access Control", b"Acme Secondary Access"),
+    }
+    for tenant_id in (first, second):
+        for name, body in files.items():
+            ingest_bytes(tenant_id=tenant_id, raw=body, filename=name, embedder=embedder)
+    yield first, second
+    _drop(first, second)
+
+
+def test_multi_document_corpus_reproduces_across_ingests(multi_doc_twice, embedder):
+    """The case the first fix did not cover. Four documents, two ingests,
+    every document id and chunk id different - the evidence order must be
+    identical, or recorded cassettes cannot survive a re-ingest."""
+    first, second = multi_doc_twice
+    settings = make_settings()
+    for question in QUESTIONS:
+        left = _texts(retrieve(tenant_id=first, question=question,
+                               embedder=embedder, reranker=None, settings=settings))
+        right = _texts(retrieve(tenant_id=second, question=question,
+                                embedder=embedder, reranker=None, settings=settings))
+        assert left, f"fixture retrieved nothing for {question!r}"
+        assert left == right, f"re-ingest reordered a four-document corpus for {question!r}"
+
+
+def test_multi_document_ordering_is_stable_within_one_ingest(multi_doc_twice, embedder):
+    """Repeated queries against one database state must not move either."""
+    tenant_id, _ = multi_doc_twice
+    settings = make_settings()
+    for question in QUESTIONS:
+        runs = [
+            _texts(retrieve(tenant_id=tenant_id, question=question,
+                            embedder=embedder, reranker=None, settings=settings))
+            for _ in range(3)
+        ]
+        assert runs[0] == runs[1] == runs[2]
+
+
+def test_documents_sharing_a_filename_still_order_deterministically(embedder):
+    """A tenant may hold two documents with the same filename: the unique
+    constraint is on (tenant_id, content_sha256). filename alone would then
+    tie, so the SQL tie-break carries content_sha256 behind it."""
+    tenant_id = _new_tenant("order-dup-filename")
     try:
-        ingest_bytes(tenant_id=tenant_id, raw=DOC_A, filename="a.md", embedder=embedder)
-        ingest_bytes(tenant_id=tenant_id, raw=DOC_B, filename="b.md", embedder=embedder)
+        ingest_bytes(tenant_id=tenant_id, raw=DOC_A, filename="policy.md", embedder=embedder)
+        ingest_bytes(tenant_id=tenant_id, raw=DOC_B, filename="policy.md", embedder=embedder)
         settings = make_settings()
         for question in QUESTIONS:
             runs = [
@@ -338,6 +448,8 @@ def test_multi_document_ordering_is_stable_within_one_ingest(embedder):
                                 embedder=embedder, reranker=None, settings=settings))
                 for _ in range(3)
             ]
-            assert runs[0] == runs[1] == runs[2]
+            assert runs[0] == runs[1] == runs[2], (
+                f"duplicate filenames made ordering unstable for {question!r}"
+            )
     finally:
         _drop(tenant_id)

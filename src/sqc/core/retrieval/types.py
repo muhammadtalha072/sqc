@@ -21,10 +21,11 @@ class Candidate:
     document_id: uuid.UUID
     chunk_index: int
     """Position of this chunk within its document. Carried so that ordering
-    can tie-break on (document_id, chunk_index), which is stable for a given
-    ingest, rather than on chunk_id, which is a fresh random UUID every time
-    a document is ingested. Unique together by schema constraint
-    (chunks_doc_index_uq), so the pair is a total order with no ambiguity."""
+    can tie-break on (filename, chunk_index) rather than on chunk_id or
+    document_id, both of which are fresh random UUIDs on every ingest. Every
+    key in that tie-break survives a re-ingest, which is what makes an
+    evidence pack - and therefore a prompt, and therefore a recorded
+    cassette - reproducible across ingests and across machines."""
     filename: str
     text: str
     parent_text: str

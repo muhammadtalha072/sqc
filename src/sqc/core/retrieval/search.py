@@ -27,22 +27,30 @@ _SCORE = 12
 columns above. Named so that adding a column moves one constant rather than
 silently shifting what the callers read as a relevance score."""
 
-_ORDER_TIE_BREAK = "c.document_id, c.chunk_index"
-"""Tie-break for equal scores.
+_ORDER_TIE_BREAK = "d.filename, d.content_sha256, c.chunk_index"
+"""Tie-break for equal scores. Every key here is derived from content.
 
-Not c.id: chunk ids are gen_random_uuid(), so two ingests of the same bytes
-produced different orders among tied rows, which changed the evidence pack,
-which changed the prompt, which orphaned every recorded cassette. Ties are
-common here - the hashing embedder returns exactly equal cosine similarity
-for many chunks, and a query made of document-title words scores nearly flat
-across a whole document.
+Ties are the common case, not an edge case: the hashing embedder returns
+exactly equal cosine similarity for many chunks, and ts_rank_cd's rank/(rank+1)
+normalisation compresses scores hard. So this ordering decides real evidence
+order, and anything random in it reaches the prompt.
 
-(document_id, chunk_index) is unique by schema constraint, so this is a total
-order. document_id is itself regenerated per ingest, so this makes ordering
-deterministic within a database state and across re-ingests of a
-single-document corpus; ties that span two documents can still swap when the
-documents are re-ingested. Fixing that would mean ordering on something
-content-derived, which is a larger change than this one."""
+Two earlier versions were random. `c.id` is gen_random_uuid(), so re-ingesting
+the same bytes reordered tied rows. `c.document_id` is too, which left
+single-document corpora stable but not multi-document ones - and that was not
+cosmetic. Measured on the four-document eval corpus, only 2 of 12 recorded
+cassettes still replayed on another machine against 7 of 12 for the
+single-document corpus, so every run re-recorded prompts that had not changed,
+spent scarce model quota, and produced eval failures that looked like
+regressions and were not.
+
+filename and content_sha256 both survive a re-ingest, so ordering is now
+reproducible across ingests and across machines. filename leads because it
+makes a debugged ordering readable; content_sha256 follows because a tenant
+may legitimately hold two documents with the same filename - the unique
+constraint is on (tenant_id, content_sha256), not on filename - and without it
+their chunk_index values would collide. (document_id, chunk_index) is unique by
+schema constraint and so is this, so the order is total."""
 
 
 def _row_to_candidate(row, *, lexical: float | None, vector: float | None) -> Candidate:  # noqa: ANN001
@@ -152,13 +160,19 @@ def reciprocal_rank_fusion(
             scores[key] = scores.get(key, 0.0) + 1.0 / (k + position)
             merged[key] = _merge(merged.get(key), candidate, position)
 
-    # Tie-break matches the SQL: (document_id, chunk_index), never chunk_id.
-    # Fusion scores collide constantly - 1/(k+rank) is the same value for any
-    # two chunks holding the same rank in their one retriever - so this sort
+    # Tie-break on content, matching the SQL: never chunk_id, never
+    # document_id, both of which are regenerated on every ingest. Fusion
+    # scores collide constantly - 1/(k+rank) is the same value for any two
+    # chunks holding the same rank in their one retriever - so this sort
     # decides real evidence order, not a rare edge case.
+    #
+    # content_sha256 is not carried on Candidate and is not needed here: the
+    # sort is stable and `merged` is built in retriever order, so two chunks
+    # sharing a filename and a chunk_index keep the deterministic order the
+    # retrievers gave them.
     ordered = sorted(
         merged.values(),
-        key=lambda c: (-scores[c.chunk_id], str(c.document_id), c.chunk_index),
+        key=lambda c: (-scores[c.chunk_id], c.filename, c.chunk_index),
     )
     return [
         Candidate(**{**_fields(c), "fusion_score": round(scores[c.chunk_id], 8)})
