@@ -407,11 +407,14 @@ def _summarise_errors(outcomes: list[CaseOutcome]) -> dict[str, int]:
     """
     counts: dict[str, int] = {}
     for outcome in outcomes:
-        message = outcome.provider_error or "unknown provider failure"
+        # Whitespace is collapsed first. Providers return errors as pretty
+        # printed JSON, so a quota failure summarised into four lines of
+        # braces - which is what a signature exists to avoid.
+        message = " ".join((outcome.provider_error or "unknown provider failure").split())
         for pattern, label in _ERROR_MARKERS:
             match = re.search(pattern, message, re.IGNORECASE)
             if match:
-                tail = message[match.end() :][:90].strip(" :\"'}")
+                tail = message[match.end() :][:90].strip(" :\"'{}[],")
                 message = f"{label}: {tail}" if tail else label
                 break
         else:

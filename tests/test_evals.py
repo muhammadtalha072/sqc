@@ -389,3 +389,25 @@ def test_identical_errors_still_collapse_to_one_line():
     ]
     summary = _summarise_errors(outcomes)
     assert len(summary) == 1 and next(iter(summary.values())) == 3
+
+
+def test_an_error_signature_is_always_one_line():
+    """Providers return errors as pretty-printed JSON. A quota failure
+    summarised into four lines of braces defeats the purpose of collapsing
+    ten identical errors into one line with a count."""
+    from evals.metrics import _summarise_errors
+
+    raw = (
+        '/v1beta/models/gemini-2.5-flash:generateContent quota exhausted: {\n'
+        '  "error": {\n    "code": 429,\n    "message": "You exceeded your current '
+        'quota, please check your plan and billing details."\n  }\n}'
+    )
+    outcome = score_case(
+        case(expect_status="answered", expect_text=("x",)),
+        result(failure_stage="provider", reason=raw),
+    )
+    label = next(iter(_summarise_errors([outcome])))
+
+    assert "\n" not in label, f"signature spans lines: {label!r}"
+    assert label.startswith("quota"), label
+    assert len(label) <= 120
